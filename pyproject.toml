@@ -80,11 +80,11 @@ lint-fix = [
 ]
 
 [tool.hatch.envs.default.scripts]
-cov = "pytest --cov-report=term-missing --cov-config=pyproject.toml --cov=synapse_invite_checker --cov=tests"
+cov = "pytest --cov-report=term-missing --cov-config=pyproject.toml --cov=famedly_control_synapse --cov=tests"
 
 # For CI use
 [tool.hatch.envs.ci.scripts]
-cov = "pytest --cov-report=lcov:lcov.info --cov-report=xml --cov-report=term-missing --cov-config=pyproject.toml --cov=synapse_invite_checker --cov=tests"
+cov = "pytest --cov-report=lcov:lcov.info --cov-report=xml --cov-report=term-missing --cov-config=pyproject.toml --cov=famedly_control_synapse --cov=tests"
 
 [[tool.hatch.envs.ci.matrix]]
 database = [ "postgres", "sqlite"]
