@@ -1,0 +1,12 @@
+__pycache__
+_trial_temp
+*.egg-info
+.eggs
+venv
+dist
+.coverage
+coverage.xml
+base.lcov
+head.lcov
+lcov.info
+.idea
