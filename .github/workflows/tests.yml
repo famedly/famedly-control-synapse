@@ -1,0 +1,74 @@
+name: Python
+
+on:
+  push:
+    branches: ["main"]
+    tags: ["*"]
+  pull_request:
+    branches: ["*"]
+  merge_group:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Tests and coverage
+    runs-on: ubuntu-latest
+    # Workaround for read-only dependabot GITHUB_TOKEN in meow-coverage
+    permissions:
+      issues: write
+      pull-requests: write
+      contents: read
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install hatch
+
+      - name: Set up PostgreSQL 15
+        # 1. Mount postgres data files onto a tmpfs in-memory filesystem to reduce overhead of docker's overlayfs layer.
+        # 2. Expose the unix socket for postgres. This removes latency of using docker-proxy for connections.
+        run: |
+          docker run -d -p 5432:5432 \
+            --tmpfs /var/lib/postgres:rw,size=6144m \
+            --mount 'type=bind,src=/var/run/postgresql,dst=/var/run/postgresql' \
+            -e POSTGRES_PASSWORD=postgres \
+            -e POSTGRES_INITDB_ARGS="--lc-collate C --lc-ctype C --encoding UTF8" \
+            postgres:15
+
+      - name: Type checking and Formatting
+        run: hatch fmt --check
+
+      - name: Prepare lint
+        shell: bash
+        run: echo PYTHON_TARGET="py${{ matrix.python-version }}" | sed -r "s/\.//" >> $GITHUB_ENV
+
+      - name: Lint
+        uses: chartboost/ruff-action@491342200cdd1cf4d5132a30ddc546b3b5bc531b
+        with:
+          args: check --target-version ${{ env.PYTHON_TARGET }}
+
+      - name: Tests and coverage
+        run: hatch run cov
+        env:
+          # to ensure we run ci:cov instead of default:cov, where the former generates more coverage files
+          HATCH_ENV: "ci"
+
+      - name: Codecov - Upload coverage
+        uses: codecov/codecov-action@v4
+        with:
+          token: ${{secrets.CODECOV_TOKEN}}
+          files: "lcov.info"
