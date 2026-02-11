@@ -1,0 +1,141 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "famedly-control-synapse"
+description = ''
+readme = "README.md"
+requires-python = ">=3.11"
+license = "AGPL-3.0-only"
+keywords = []
+authors = [
+  { name = "Nicolas Werner", email = "n.werner@famedly.com" },
+  { name = "Jason Little", email = "j.little@famedly.com" },
+  { name = "Soyoung Kim", email = "s.kim@famedly.com" },
+  { name = "Thomast Traineau", email = "t.traineau@famedly.com" },
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: Implementation :: CPython",
+  "Programming Language :: Python :: Implementation :: PyPy",
+]
+dependencies = [
+]
+version = "0.0.1"
+
+[project.urls]
+Documentation = "https://github.com/famedly/famedly-control-synapse#famedly-control-synapse"
+Issues = "https://github.com/famedly/famedly-control-synapse/-/issues"
+Source = "https://github.com/famedly/famedly-control-synapse/"
+
+[tool.hatch.envs.default]
+dependencies = [
+  "black",
+  "pytest",
+  "pytest-cov",
+  "mock",
+  "parameterized",
+  "psycopg2",
+  # we don't depend on synapse directly to prevent pip from pulling the wrong synapse,
+  # when we just want to install the module
+  "matrix-synapse @ git+https://github.com/famedly/synapse.git@master"
+]
+
+[tool.hatch.envs.hatch-static-analysis]
+dependencies = [
+  "black",
+  "isort",
+  "ruff",
+  "mypy",
+  "mypy-zope",
+  "pydantic",
+  "mypy-zope",
+  "types-PyYAML",
+  "types-bleach",
+  "types-cachetools",
+  "types-requests",
+  "types-pyOpenSSL"
+]
+
+[tool.hatch.envs.hatch-static-analysis.scripts]
+format-check = [
+  "isort . --check --diff",
+  "black . --check --diff"
+]
+format-fix = [
+  "isort .",
+  "black ."
+]
+lint-check = [
+  "mypy",
+  "ruff check"
+]
+lint-fix = [
+  "mypy",
+  "ruff check --fix"
+]
+
+[tool.hatch.envs.default.scripts]
+cov = "pytest --cov-report=term-missing --cov-config=pyproject.toml --cov=synapse_invite_checker --cov=tests"
+
+# For CI use
+[tool.hatch.envs.ci.scripts]
+cov = "pytest --cov-report=lcov:lcov.info --cov-report=xml --cov-report=term-missing --cov-config=pyproject.toml --cov=synapse_invite_checker --cov=tests"
+
+[[tool.hatch.envs.ci.matrix]]
+database = [ "postgres", "sqlite"]
+
+[tool.hatch.envs.ci.overrides]
+matrix.database.env-vars = [
+  { key = "SYNAPSE_POSTGRES", value = "1", if = ["postgres"] },
+  { key = "SYNAPSE_POSTGRES_USER", value = "postgres", if = ["postgres"] },
+  { key = "SYNAPSE_POSTGRES_PASSWORD", value = "postgres", if = ["postgres"] },
+]
+
+[tool.coverage.run]
+branch = true
+parallel = true
+omit = ["tests/*"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 88
+
+[tool.ruff.lint]
+ignore = [
+  "FBT001",
+  "FBT002",
+  "TRY002",
+  "TRY003",
+  "PLW0603",
+  "N802",
+  "N815"
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101", "S105", "PLR2004", "N803", "SLF001", "UP035", "PT019"]
+
+[tool.coverage.report]
+exclude_lines = [
+  "no cov",
+  "if __name__ == .__main__.:",
+  "if TYPE_CHECKING:",
+]
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+install_types = true
+plugins = [
+  "pydantic.mypy",
+  "mypy_zope:plugin"
+]
+files = ["famedly_control_synapse", "tests"]
+
+[tool.isort]
+profile = "black"
+src_paths = ["famedly_control_synapse", "tests"]
