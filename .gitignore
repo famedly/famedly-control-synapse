@@ -10,3 +10,21 @@ base.lcov
 head.lcov
 lcov.info
 .idea
+
+# build products
+!/.coveragerc
+/.coverage*
+/.mypy_cache/
+/.tox
+/.tox-pg-container
+/build/
+/coverage.*
+/dist/
+/docs/build/
+/dev-docs/_build/
+/htmlcov
+/pip-wheel-metadata/
+
+.vscode
+
+media/

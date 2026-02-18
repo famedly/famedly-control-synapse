@@ -15,7 +15,14 @@
 import logging
 from typing import Any
 
+from synapse.module_api import ModuleApi
+
 from famedly_control_synapse.config import FamedlyControlConfig
+from famedly_control_synapse.rest.room import (
+    MANAGED_ROOM_API_PREFIX,
+    CreateManagedRoomResource,
+    ManagedRoomResource,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -23,11 +30,22 @@ logger = logging.getLogger(__name__)
 class FamedlyControl:
     __version__ = "0.0.1"
 
-    def __init__(self, config: FamedlyControlConfig):
+    def __init__(self, config: FamedlyControlConfig, api: ModuleApi) -> None:
+        self.api = api
+        self.server_name = api.server_name
+        self.clock = api._hs.get_clock()
         self.config = config
+        root_resource = ManagedRoomResource(self.api, self.config)
+        root_resource.putChild(
+            b"createRoom", CreateManagedRoomResource(self.api, self.config)
+        )
+        self.api.register_web_resource(MANAGED_ROOM_API_PREFIX, root_resource)
 
         logger.info("Module initialized")
 
     @staticmethod
     def parse_config(config: dict[str, Any]) -> FamedlyControlConfig:
         return FamedlyControlConfig.model_validate(config)
+
+
+# TODO: configure necessary callbacks if needed
