@@ -1,0 +1,270 @@
+# Copyright 2014-2016 OpenMarket Ltd
+# Copyright 2018-2019 New Vector Ltd
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+import atexit
+import os
+import sys
+import warnings
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Literal, TypeVar, overload
+
+from synapse.config.homeserver import HomeServerConfig
+from synapse.config.server import DEFAULT_ROOM_VERSION
+from synapse.storage.database import LoggingDatabaseConnection
+from synapse.storage.engines import create_engine
+from synapse.storage.prepare_database import prepare_database
+
+if TYPE_CHECKING:
+    from sys import UnraisableHookArgs
+
+
+# set this to True to run the tests against postgres instead of sqlite.
+#
+# When running under postgres, we first create a base database with the name
+# POSTGRES_BASE_DB and update it to the current schema. Then, for each test case, we
+# create another unique database, using the base database as a template.
+USE_POSTGRES_FOR_TESTS = os.environ.get("SYNAPSE_POSTGRES", False)
+LEAVE_DB = os.environ.get("SYNAPSE_LEAVE_DB", False)
+POSTGRES_USER = os.environ.get("SYNAPSE_POSTGRES_USER", None)
+POSTGRES_HOST = os.environ.get("SYNAPSE_POSTGRES_HOST", None)
+POSTGRES_PASSWORD = os.environ.get("SYNAPSE_POSTGRES_PASSWORD", None)
+POSTGRES_PORT = (
+    int(os.environ["SYNAPSE_POSTGRES_PORT"])
+    if "SYNAPSE_POSTGRES_PORT" in os.environ
+    else None
+)
+POSTGRES_BASE_DB = f"_synapse_unit_tests_base_{os.getpid()}"
+
+# When debugging a specific test, it's occasionally useful to write the
+# DB to disk and query it with the sqlite CLI.
+SQLITE_PERSIST_DB = os.environ.get("SYNAPSE_TEST_PERSIST_SQLITE_DB") is not None
+
+# the dbname we will connect to in order to create the base database.
+POSTGRES_DBNAME_FOR_INITIAL_CREATE = "postgres"
+
+
+def setupdb() -> None:
+    # If we're using PostgreSQL, set up the db once
+    if USE_POSTGRES_FOR_TESTS:
+        # create a PostgresEngine
+        db_engine = create_engine({"name": "psycopg2", "args": {}})
+        # connect to postgres to create the base database.
+        db_conn = db_engine.module.connect(
+            user=POSTGRES_USER,
+            host=POSTGRES_HOST,
+            port=POSTGRES_PORT,
+            password=POSTGRES_PASSWORD,
+            dbname=POSTGRES_DBNAME_FOR_INITIAL_CREATE,
+        )
+        db_engine.attempt_to_set_autocommit(db_conn, autocommit=True)
+        cur = db_conn.cursor()
+        cur.execute(f"DROP DATABASE IF EXISTS {POSTGRES_BASE_DB};")
+        cur.execute(
+            f"CREATE DATABASE {POSTGRES_BASE_DB} ENCODING 'UTF8' LC_COLLATE='C' LC_CTYPE='C' "
+            f"template=template0;"
+        )
+        cur.close()
+        db_conn.close()
+
+        # Set up in the db
+        db_conn = db_engine.module.connect(
+            dbname=POSTGRES_BASE_DB,
+            user=POSTGRES_USER,
+            host=POSTGRES_HOST,
+            port=POSTGRES_PORT,
+            password=POSTGRES_PASSWORD,
+        )
+        logging_conn = LoggingDatabaseConnection(
+            conn=db_conn,
+            engine=db_engine,
+            default_txn_name="tests",
+            server_name="test_server",
+        )
+        prepare_database(logging_conn, db_engine, None)
+        logging_conn.close()
+
+        def _cleanup() -> None:
+            db_conn = db_engine.module.connect(
+                user=POSTGRES_USER,
+                host=POSTGRES_HOST,
+                port=POSTGRES_PORT,
+                password=POSTGRES_PASSWORD,
+                dbname=POSTGRES_DBNAME_FOR_INITIAL_CREATE,
+            )
+            db_engine.attempt_to_set_autocommit(db_conn, autocommit=True)
+            cur = db_conn.cursor()
+            cur.execute(f"DROP DATABASE IF EXISTS {POSTGRES_BASE_DB};")
+            cur.close()
+            db_conn.close()
+
+        atexit.register(_cleanup)
+
+
+@overload
+def default_config(name: str, parse: Literal[False] = ...) -> dict[str, object]: ...
+
+
+@overload
+def default_config(name: str, parse: Literal[True]) -> HomeServerConfig: ...
+
+
+def default_config(
+    name: str, parse: bool = False
+) -> dict[str, object] | HomeServerConfig:
+    """
+    Create a reasonable test config.
+    """
+    config_dict = {
+        "server_name": name,
+        # Setting this to an empty list turns off federation sending.
+        "federation_sender_instances": [],
+        "media_store_path": "media",
+        # the test signing key is just an arbitrary ed25519 key to keep the config
+        # parser happy
+        "signing_key": "ed25519 a_lPym qvioDNmfExFBRPgdTU+wtFYKq4JfwFRv7sYVgWvmgJg",
+        # Disable trusted key servers, otherwise unit tests might try to actually
+        # reach out to matrix.org.
+        "trusted_key_servers": [],
+        "event_cache_size": 1,
+        "enable_registration": True,
+        "enable_registration_captcha": False,
+        "macaroon_secret_key": "not even a little secret",
+        "password_providers": [],
+        "worker_app": None,
+        "block_non_admin_invites": False,
+        "federation_domain_whitelist": None,
+        "filter_timeline_limit": 5000,
+        "user_directory_search_all_users": False,
+        "user_consent_server_notice_content": None,
+        "block_events_without_consent_error": None,
+        "user_consent_at_registration": False,
+        "user_consent_policy_name": "Privacy Policy",
+        "media_storage_providers": [],
+        "autocreate_auto_join_rooms": True,
+        "auto_join_rooms": [],
+        "limit_usage_by_mau": False,
+        "hs_disabled": False,
+        "hs_disabled_message": "",
+        "max_mau_value": 50,
+        "mau_trial_days": 0,
+        "mau_stats_only": False,
+        "mau_limits_reserved_threepids": [],
+        "admin_contact": None,
+        "rc_message": {"per_second": 10000, "burst_count": 10000},
+        "rc_registration": {"per_second": 10000, "burst_count": 10000},
+        "rc_login": {
+            "address": {"per_second": 10000, "burst_count": 10000},
+            "account": {"per_second": 10000, "burst_count": 10000},
+            "failed_attempts": {"per_second": 10000, "burst_count": 10000},
+        },
+        "rc_joins": {
+            "local": {"per_second": 10000, "burst_count": 10000},
+            "remote": {"per_second": 10000, "burst_count": 10000},
+        },
+        "rc_joins_per_room": {"per_second": 10000, "burst_count": 10000},
+        "rc_invites": {
+            "per_room": {"per_second": 10000, "burst_count": 10000},
+            "per_user": {"per_second": 10000, "burst_count": 10000},
+        },
+        "rc_3pid_validation": {"per_second": 10000, "burst_count": 10000},
+        "saml2_enabled": False,
+        "public_baseurl": None,
+        "default_identity_server": None,
+        "key_refresh_interval": 24 * 60 * 60 * 1000,
+        "old_signing_keys": {},
+        "tls_fingerprints": [],
+        "use_frozen_dicts": False,
+        # We need a sane default_room_version, otherwise attempts to create
+        # rooms will fail.
+        "default_room_version": DEFAULT_ROOM_VERSION,
+        # disable user directory updates, because they get done in the
+        # background, which upsets the test runner. Setting this to an
+        # (obviously) fake worker name disables updating the user directory.
+        "update_user_directory_from_worker": "does_not_exist_worker_name",
+        "caches": {"global_factor": 1, "sync_response_cache_duration": 0},
+        "listeners": [{"port": 0, "type": "http"}],
+    }
+
+    if parse:
+        config = HomeServerConfig()
+        config.parse_config_dict(config_dict, "", "")
+        return config
+
+    return config_dict
+
+
+def mock_getRawHeaders(headers=None):  # type: ignore[no-untyped-def]
+    headers = headers if headers is not None else {}
+
+    def getRawHeaders(name, default=None):  # type: ignore[no-untyped-def]
+        # If the requested header is present, the real twisted function returns
+        # List[str] if name is a str and List[bytes] if name is a bytes.
+        # This mock doesn't support that behaviour.
+        # Fortunately, none of the current callers of mock_getRawHeaders() provide a
+        # headers dict, so we don't encounter this discrepancy in practice.
+        return headers.get(name, default)
+
+    return getRawHeaders
+
+
+T = TypeVar("T")
+
+
+def checked_cast(type_: type[T], x: object) -> T:
+    """A version of typing.cast that is checked at runtime.
+
+    We have our own function for this for two reasons:
+
+    1. typing.cast itself is deliberately a no-op at runtime, see
+       https://docs.python.org/3/library/typing.html#typing.cast
+    2. To help workaround a mypy-zope bug https://github.com/Shoobx/mypy-zope/issues/91
+       where mypy would erroneously consider `isinstance(x, type)` to be false in all
+       circumstances.
+
+    For this to make sense, `T` needs to be something that `isinstance` can check; see
+        https://docs.python.org/3/library/functions.html?highlight=isinstance#isinstance
+        https://docs.python.org/3/glossary.html#term-abstract-base-class
+        https://docs.python.org/3/library/typing.html#typing.runtime_checkable
+    for more details.
+    """
+    assert isinstance(x, type_)
+    return x
+
+
+def setup_awaitable_errors() -> Callable[[], None]:
+    """
+    Convert warnings from a non-awaited coroutines into errors.
+    """
+    warnings.simplefilter("error", RuntimeWarning)
+
+    # State shared between unraisablehook and check_for_unraisable_exceptions.
+    unraisable_exceptions = []
+    orig_unraisablehook = sys.unraisablehook
+
+    def unraisablehook(unraisable: "UnraisableHookArgs") -> None:
+        unraisable_exceptions.append(unraisable.exc_value)
+
+    def cleanup() -> None:
+        """
+        A method to be used as a clean-up that fails a test-case if there are any new unraisable exceptions.
+        """
+        sys.unraisablehook = orig_unraisablehook
+        if unraisable_exceptions:
+            exc = unraisable_exceptions.pop()
+            assert exc is not None
+            raise exc
+
+    sys.unraisablehook = unraisablehook
+
+    return cleanup
