@@ -19,6 +19,7 @@ class FamedlyControlConfig(BaseModel):
     title: str = "Famedly Control module by Famedly"
     description: str = "Famedly Control module by Famedly"
     contact: str = "info@famedly.com"
+    # TODO: use configured url and access token
     url: HttpUrl = Field(
         ..., description="HTTP or HTTPS URL for the Famedly Control API"
     )
@@ -32,3 +33,6 @@ class FamedlyControlConfig(BaseModel):
         if not v.strip():
             raise ValueError("access_token cannot be empty or whitespace-only")
         return v
+
+
+# TODO: configure the logging options
