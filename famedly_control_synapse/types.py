@@ -4,6 +4,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from synapse.api.constants import EventTypes, GuestAccess, Membership
 from synapse.types import JsonDict
 
+MANAGED_ROOM_TYPE = "de.famedly.managedRoom"
+
 
 class CreationContent(BaseModel):
     """Pydantic model for CreationContent."""
