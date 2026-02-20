@@ -21,6 +21,7 @@ from famedly_control_synapse.config import FamedlyControlConfig
 from famedly_control_synapse.rest.room import (
     MANAGED_ROOM_API_PREFIX,
     CreateManagedRoomResource,
+    ListManagedRoomsResource,
     ManagedRoomResource,
 )
 
@@ -38,6 +39,9 @@ class FamedlyControl:
         root_resource = ManagedRoomResource(self.api, self.config)
         root_resource.putChild(
             b"createRoom", CreateManagedRoomResource(self.api, self.config)
+        )
+        root_resource.putChild(
+            b"rooms", ListManagedRoomsResource(self.api, self.config)
         )
         self.api.register_web_resource(MANAGED_ROOM_API_PREFIX, root_resource)
 

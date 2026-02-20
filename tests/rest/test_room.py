@@ -197,3 +197,171 @@ class TestManagedRoomCreation(ModuleApiTestCase):
         )
         invitee_pl = event_auth.get_user_power_level(self.invitee, auth_events)
         assert invitee_pl == 0, "Invitee should have power level 0"
+
+
+class TestListManagedRooms(ModuleApiTestCase):
+    LIST_PATH = "/_famedlyControl/v1/managedRooms/rooms"
+    CREATE_PATH = "/_famedlyControl/v1/managedRooms/createRoom"
+
+    def prepare(self, reactor: MemoryReactor, clock: Clock, homeserver: HomeServer):
+        super().prepare(reactor, clock, homeserver)
+        self.non_admin = self.register_user("non_admin", "password", admin=False)
+        self.non_admin_token = self.login("non_admin", "password")
+        self.account_data_handler = homeserver.get_account_data_handler()
+
+    _room_counter = 0
+
+    def _create_managed_room(
+        self, name: str = "Test Room", groups: list[str] | None = None
+    ) -> str:
+        TestListManagedRooms._room_counter += 1
+        config = CreateManagedRoomRequest(
+            room_alias_name=f"test_room_{TestListManagedRooms._room_counter}",
+            name=name,
+            topic=f"Topic for {name}",
+            groups=["test_group"],
+        )
+        if groups:
+            config.groups = groups
+        channel = self.make_request(
+            method="POST",
+            path=self.CREATE_PATH,
+            content=config.model_dump(),
+            access_token=self.creator_access_token,
+            shorthand=False,
+        )
+        assert channel.code == HTTPStatus.OK, channel.result
+        return channel.json_body["room_id"]
+
+    def test_list_requires_admin(self) -> None:
+        """Non-admin users should get a 403."""
+        channel = self.make_request(
+            method="GET",
+            path=self.LIST_PATH,
+            access_token=self.non_admin_token,
+            shorthand=False,
+        )
+        assert channel.code == HTTPStatus.FORBIDDEN, channel.result
+
+    def test_list_requires_auth(self) -> None:
+        """Unauthenticated requests should get a 401."""
+        channel = self.make_request(
+            method="GET",
+            path=self.LIST_PATH,
+            shorthand=False,
+        )
+        assert channel.code == HTTPStatus.UNAUTHORIZED, channel.result
+
+    def test_list_empty(self) -> None:
+        """Listing when no managed rooms exist should return empty chunk."""
+        channel = self.make_request(
+            method="GET",
+            path=self.LIST_PATH,
+            access_token=self.creator_access_token,
+            shorthand=False,
+        )
+        assert channel.code == HTTPStatus.OK, channel.result
+        assert channel.json_body["chunk"] == []
+        assert channel.json_body["total_room_count_estimate"] == 0
+
+    def test_list_returns_managed_rooms(self) -> None:
+        """Created managed rooms should appear in the listing."""
+        room_id = self._create_managed_room(
+            name="Listed Room", groups=["group1", "group2"]
+        )
+
+        channel = self.make_request(
+            method="GET",
+            path=self.LIST_PATH,
+            access_token=self.creator_access_token,
+            shorthand=False,
+        )
+        assert channel.code == HTTPStatus.OK, channel.result
+        assert channel.json_body["total_room_count_estimate"] == 1
+        assert len(channel.json_body["chunk"]) == 1
+
+        room_chunk = channel.json_body["chunk"][0]
+        assert room_chunk["room_id"] == room_id
+        assert room_chunk["de.famedly.managedRoom"]["groups"] == [
+            "group1",
+            "group2",
+        ]
+
+    def test_list_pagination(self) -> None:
+        """Pagination should work with from and limit params."""
+        room_ids = []
+        for i in range(3):
+            room_ids.append(self._create_managed_room(name=f"Room {i}"))
+
+        # Get first page with limit 2
+        channel = self.make_request(
+            method="GET",
+            path=f"{self.LIST_PATH}?limit=2",
+            access_token=self.creator_access_token,
+            shorthand=False,
+        )
+        assert channel.code == HTTPStatus.OK, channel.result
+        assert len(channel.json_body["chunk"]) == 2
+        assert channel.json_body["total_room_count_estimate"] == 3
+        assert "next_batch" in channel.json_body
+        assert "prev_batch" not in channel.json_body
+
+        # Get second page
+        next_batch = channel.json_body["next_batch"]
+        channel = self.make_request(
+            method="GET",
+            path=f"{self.LIST_PATH}?from={next_batch}&limit=2",
+            access_token=self.creator_access_token,
+            shorthand=False,
+        )
+        assert channel.code == HTTPStatus.OK, channel.result
+        assert len(channel.json_body["chunk"]) == 1
+        assert "next_batch" not in channel.json_body
+        assert "prev_batch" in channel.json_body
+
+    def test_list_no_duplicates_with_multiple_users(self) -> None:
+        """A room with account data from multiple users should appear once
+        with all groups merged."""
+        from famedly_control_synapse.types import MANAGED_ROOM_TYPE
+
+        room_id = self._create_managed_room(name="Shared Room", groups=["group_a"])
+
+        # Register extra users with overlapping groups
+        user_groups = [
+            ["group_a", "group_b"],  # overlaps with creator's group_a
+            ["group_b", "group_c"],  # overlaps with previous user's group_b
+            ["group_a", "group_c"],  # overlaps with both creator and user above
+        ]
+        for i, groups in enumerate(user_groups):
+            user = self.register_user(f"extra_user_{i}", "password", admin=False)
+            self.get_success(
+                self.account_data_handler.add_account_data_to_room(
+                    user,
+                    room_id,
+                    MANAGED_ROOM_TYPE,
+                    {"groups": groups},
+                )
+            )
+
+        channel = self.make_request(
+            method="GET",
+            path=self.LIST_PATH,
+            access_token=self.creator_access_token,
+            shorthand=False,
+        )
+        assert channel.code == HTTPStatus.OK, channel.result
+        assert (
+            channel.json_body["total_room_count_estimate"] == 1
+        ), f"Expected 1 room but count was {channel.json_body['total_room_count_estimate']}"
+        assert (
+            len(channel.json_body["chunk"]) == 1
+        ), f"Expected 1 entry in chunk but got {len(channel.json_body['chunk'])}"
+
+        result_groups = channel.json_body["chunk"][0]["de.famedly.managedRoom"][
+            "groups"
+        ]
+        assert sorted(result_groups) == [
+            "group_a",
+            "group_b",
+            "group_c",
+        ], f"Expected deduplicated merged groups, got {result_groups}"
