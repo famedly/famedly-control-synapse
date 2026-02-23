@@ -19,9 +19,6 @@ POWER_KEY = (EventTypes.PowerLevels, "")
 
 
 class TestManagedRoomCreation(ModuleApiTestCase):
-    def prepare(self, reactor: MemoryReactor, clock: Clock, homeserver: HomeServer):
-        super().prepare(reactor, clock, homeserver)
-
     def room_config_v12(self):
         config = CreateManagedRoomRequest(
             room_alias_name="test_room_alias",
@@ -55,7 +52,7 @@ class TestManagedRoomCreation(ModuleApiTestCase):
         """Tests that managed room creation returns the expected response"""
         channel = self.make_request(
             method="POST",
-            path="/_famedlyControl/v1/managedRooms/createRoom",
+            path=self.CREATE_PATH,
             content=self.room_config_v12(),
             access_token=self.creator_access_token,
             shorthand=False,
@@ -91,7 +88,7 @@ class TestManagedRoomCreation(ModuleApiTestCase):
         """Tests that invalid request body returns a 400 error with an error message"""
         channel = self.make_request(
             method="POST",
-            path="/_famedlyControl/v1/managedRooms/createRoom",
+            path=self.CREATE_PATH,
             content=self.invalid_room_config(),
             access_token=self.creator_access_token,
             shorthand=False,
@@ -106,7 +103,7 @@ class TestManagedRoomCreation(ModuleApiTestCase):
         """Tests that missing required fields in the request body returns a 400 error with an error message"""
         channel = self.make_request(
             method="POST",
-            path="/_famedlyControl/v1/managedRooms/createRoom",
+            path=self.CREATE_PATH,
             content={"name": "Test Room"},
             access_token=self.creator_access_token,
             shorthand=False,
@@ -122,7 +119,7 @@ class TestManagedRoomCreation(ModuleApiTestCase):
         room_config = self.room_config_v12()
         channel = self.make_request(
             method="POST",
-            path="/_famedlyControl/v1/managedRooms/createRoom",
+            path=self.CREATE_PATH,
             content=room_config,
             access_token=self.creator_access_token,
             shorthand=False,
@@ -162,7 +159,7 @@ class TestManagedRoomCreation(ModuleApiTestCase):
         room_config = self.room_config_v10()
         channel = self.make_request(
             method="POST",
-            path="/_famedlyControl/v1/managedRooms/createRoom",
+            path=self.CREATE_PATH,
             content=room_config,
             access_token=self.creator_access_token,
             shorthand=False,
@@ -199,39 +196,41 @@ class TestManagedRoomCreation(ModuleApiTestCase):
         assert invitee_pl == 0, "Invitee should have power level 0"
 
 
-class TestListManagedRooms(ModuleApiTestCase):
-    LIST_PATH = "/_famedlyControl/v1/managedRooms/rooms"
-    CREATE_PATH = "/_famedlyControl/v1/managedRooms/createRoom"
+class TestAssignGroupToManagedRoom(ModuleApiTestCase):
+    def test_assign_group_to_managed_room(self) -> None:
+        """Tests that assigning a group to a managed room updates the account data correctly"""
+        # Create a managed room
+        room_id = self._create_managed_room(name="Test Room", groups=[])
+        test_groups = ["1234", "5678"]
 
+        # Assign a group to the managed room
+        channel = self.make_request(
+            method="POST",
+            path=self.BASE_PATH + f"/{room_id}/groups",
+            content={"groups": test_groups},
+            access_token=self.creator_access_token,
+            shorthand=False,
+        )
+        assert channel.code == HTTPStatus.OK, channel.result
+        assert (
+            channel.json_body["groups"] == test_groups
+        ), "Response should contain the assigned groups"
+
+        # Check if account data is updated with the assigned group
+        account_data = self.get_success(
+            self.store.get_account_data_for_room(self.creator, room_id)
+        )
+        assert account_data == {
+            MANAGED_ROOM_TYPE: {"groups": test_groups}
+        }, "Account data should be updated with the assigned group"
+
+
+class TestListManagedRooms(ModuleApiTestCase):
     def prepare(self, reactor: MemoryReactor, clock: Clock, homeserver: HomeServer):
         super().prepare(reactor, clock, homeserver)
         self.non_admin = self.register_user("non_admin", "password", admin=False)
         self.non_admin_token = self.login("non_admin", "password")
         self.account_data_handler = homeserver.get_account_data_handler()
-
-    _room_counter = 0
-
-    def _create_managed_room(
-        self, name: str = "Test Room", groups: list[str] | None = None
-    ) -> str:
-        TestListManagedRooms._room_counter += 1
-        config = CreateManagedRoomRequest(
-            room_alias_name=f"test_room_{TestListManagedRooms._room_counter}",
-            name=name,
-            topic=f"Topic for {name}",
-            groups=["test_group"],
-        )
-        if groups:
-            config.groups = groups
-        channel = self.make_request(
-            method="POST",
-            path=self.CREATE_PATH,
-            content=config.model_dump(),
-            access_token=self.creator_access_token,
-            shorthand=False,
-        )
-        assert channel.code == HTTPStatus.OK, channel.result
-        return channel.json_body["room_id"]
 
     def test_list_requires_admin(self) -> None:
         """Non-admin users should get a 403."""

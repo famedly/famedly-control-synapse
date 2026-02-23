@@ -14,6 +14,7 @@
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
 # from jwcrypto import jwe, jwk, jwt
 import logging
+from http import HTTPStatus
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from synapse.rest import admin
@@ -32,6 +33,7 @@ from synapse.util.clock import Clock
 from twisted.internet.testing import MemoryReactor
 
 import tests.utils.homeserver_testcase as synapsetest
+from famedly_control_synapse.types import CreateManagedRoomRequest
 
 logger = logging.getLogger(__name__)
 # ruff: noqa: E501
@@ -45,6 +47,10 @@ if TYPE_CHECKING:
 
 class ModuleApiTestCase(synapsetest.HomeserverTestCase):
     server_name_for_this_server = "testserver.com"
+    _room_counter = 0
+    BASE_PATH = "/_famedlyControl/v1/managedRooms"
+    LIST_PATH = BASE_PATH + "/rooms"
+    CREATE_PATH = BASE_PATH + "/createRoom"
 
     @classmethod
     def setUpClass(cls):
@@ -106,3 +112,25 @@ class ModuleApiTestCase(synapsetest.HomeserverTestCase):
                 }
             ]
         return conf
+
+    def _create_managed_room(
+        self, name: str = "Test Room", groups: list[str] | None = None
+    ) -> str:
+        self._room_counter += 1
+        config = CreateManagedRoomRequest(
+            room_alias_name=f"test_room_{self._room_counter}",
+            name=name,
+            topic=f"Topic for {name}",
+            groups=["test_group"],
+        )
+        if groups:
+            config.groups = groups
+        channel = self.make_request(
+            method="POST",
+            path=self.CREATE_PATH,
+            content=config.model_dump(),
+            access_token=self.creator_access_token,
+            shorthand=False,
+        )
+        assert channel.code == HTTPStatus.OK, channel.result
+        return channel.json_body["room_id"]

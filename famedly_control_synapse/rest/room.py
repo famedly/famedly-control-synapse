@@ -18,6 +18,25 @@ from famedly_control_synapse.types import MANAGED_ROOM_TYPE, CreateManagedRoomRe
 MANAGED_ROOM_API_PREFIX = "/_famedlyControl/v1/managedRooms"
 
 
+class RoomIdRouter(DirectServeJsonResource):
+    """Routes requests with room_id path variable to the appropriate resource."""
+
+    def __init__(self, api: ModuleApi, config: FamedlyControlConfig):
+        DirectServeJsonResource.__init__(self)
+        self.api = api
+        self.config = config
+        self.isLeaf = False
+
+    def getChild(self, path: bytes, request):
+        """Handle /{room_id}/... pattern."""
+        room_id = path.decode("utf-8")
+        room_resource = DirectServeJsonResource()
+        room_resource.putChild(
+            b"groups", AssignGroupToManagedRoomResource(self.api, self.config, room_id)
+        )
+        return room_resource
+
+
 class ManagedRoomResource(DirectServeJsonResource):
     def __init__(
         self,
@@ -28,6 +47,25 @@ class ManagedRoomResource(DirectServeJsonResource):
         self.api = api
         self.config = config
         self.account_data_handler = self.api._hs.get_account_data_handler()
+
+    async def _assert_requester_is_admin(
+        self, request: SynapseRequest
+    ) -> tuple[str | None, int | None, JsonDict | None]:
+        """Check if requester is an admin. Returns user_id if admin, or raises an error if not.
+
+        Args:
+            request: The request to check.
+
+        Returns:
+            Tuple of (user_id, None) if admin, or (None, error_response) if not.
+        """
+        requester = await self.api.get_user_by_req(request)
+        user_id = requester.user.to_string()
+
+        if not await self.api.is_user_admin(user_id):
+            return None, 403, {"error": "user is not administrator"}
+
+        return user_id, None, None
 
 
 class CreateManagedRoomResource(ManagedRoomResource):
@@ -40,11 +78,11 @@ class CreateManagedRoomResource(ManagedRoomResource):
 
     async def _async_render_POST(self, request: SynapseRequest) -> tuple[int, JsonDict]:
         """Handle POST requests to create a new managed room."""
-        requester = await self.api.get_user_by_req(request)
-        user_id = requester.user.to_string()
-        is_admin = await self.api.is_user_admin(user_id)
-        if not is_admin:
-            return 403, {"error": "user is not administrator"}
+        user_id, error_code, error_response = await self._assert_requester_is_admin(
+            request
+        )
+        if error_code:
+            return error_code, error_response
 
         room_config = parse_json_object_from_request(request)
 
@@ -82,14 +120,44 @@ class CreateManagedRoomResource(ManagedRoomResource):
         return 200, {"room_id": room_id}
 
 
+class AssignGroupToManagedRoomResource(ManagedRoomResource):
+    def __init__(
+        self,
+        api: ModuleApi,
+        config: FamedlyControlConfig,
+        room_id: str,
+    ) -> None:
+        super().__init__(api, config)
+        self.room_id = room_id
+
+    async def _async_render_POST(self, request: SynapseRequest) -> tuple[int, JsonDict]:
+        """Handle POST requests to assign groups to a managed room."""
+        user_id, error_code, error_response = await self._assert_requester_is_admin(
+            request
+        )
+        if error_code:
+            return error_code, error_response
+
+        groups = parse_json_object_from_request(request).get("groups", [])
+
+        await self.account_data_handler.remove_account_data_for_room(
+            user_id, self.room_id, MANAGED_ROOM_TYPE
+        )
+        await self.account_data_handler.add_account_data_to_room(
+            user_id,
+            self.room_id,
+            MANAGED_ROOM_TYPE,
+            {"groups": groups},
+        )
+        return 200, {"room_id": self.room_id, "groups": groups}
+
+
 class ListManagedRoomsResource(ManagedRoomResource):
     async def _async_render_GET(self, request: SynapseRequest) -> tuple[int, JsonDict]:
         """Handle GET requests to list managed rooms."""
-        requester = await self.api.get_user_by_req(request)
-        user_id = requester.user.to_string()
-
-        if not await self.api.is_user_admin(user_id):
-            return 403, {"error": "user is not administrator"}
+        _, error_code, error_response = await self._assert_requester_is_admin(request)
+        if error_code:
+            return error_code, error_response
 
         from_token = parse_string(request, "from")
         limit = parse_integer(request, "limit", default=100)
