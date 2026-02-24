@@ -42,7 +42,7 @@ class PowerLevelEventContent(BaseModel):
     kick: int = 100
     redact: int = 100
     state_default: int = 100
-    users: dict[str | None, int | None] = Field(default_factory=dict)
+    users: dict[str, int] = Field(default_factory=dict)
     users_default: int = 0
     notifications: dict[str, int] = Field(default_factory=dict)
 

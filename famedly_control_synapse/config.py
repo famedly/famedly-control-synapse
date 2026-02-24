@@ -26,6 +26,11 @@ class FamedlyControlConfig(BaseModel):
     access_token: str = Field(
         ..., min_length=1, description="Access token for authentication"
     )
+    api_key: str = Field(
+        ...,
+        min_length=1,
+        description="API key for authenticating with Famedly Control API",
+    )
 
     @field_validator("access_token")
     @classmethod

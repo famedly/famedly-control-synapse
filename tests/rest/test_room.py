@@ -1,4 +1,5 @@
 from http import HTTPStatus
+from unittest.mock import AsyncMock, patch
 
 from synapse import event_auth
 from synapse.api.constants import (
@@ -195,34 +196,124 @@ class TestManagedRoomCreation(ModuleApiTestCase):
         invitee_pl = event_auth.get_user_power_level(self.invitee, auth_events)
         assert invitee_pl == 0, "Invitee should have power level 0"
 
+    @patch(
+        "famedly_control_synapse.client.FamedlyControlClient.get_group_members",
+        new_callable=AsyncMock,
+    )
+    def test_room_created_with_memebers_joined(self, mock_get_group_members) -> None:
+        """Tests that the users of the groups are joined to the room after creation"""
+        test_group = "test_group_1"
+        test_member_1 = self.register_user("test_member_1", "password")
+        test_member_2 = self.register_user("test_member_2", "password")
+        group_members = [test_member_1, test_member_2]
+        mock_get_group_members.return_value = group_members
 
-class TestAssignGroupToManagedRoom(ModuleApiTestCase):
-    def test_assign_group_to_managed_room(self) -> None:
-        """Tests that assigning a group to a managed room updates the account data correctly"""
-        # Create a managed room
-        room_id = self._create_managed_room(name="Test Room", groups=[])
-        test_groups = ["1234", "5678"]
+        # Create a managed room with a group that has members
+        room_id = self._create_managed_room(
+            name="Test Room with Group Members", groups=[test_group]
+        )
 
-        # Assign a group to the managed room
+        # Check if the member of the group is joined to the room
+        for member in group_members:
+            path = f"/_matrix/client/v3/rooms/{room_id}/state/m.room.member/{member}"
+            channel = self.make_request(
+                "GET", path, access_token=self.creator_access_token
+            )
+            assert (
+                channel.code == HTTPStatus.OK
+            ), f"Expected 200 but got {channel.code} for member {member}"
+            assert channel.json_body["membership"] == "join", channel.json_body[
+                "membership"
+            ]
+
+        # Check the account data is updated
+        room_account_data = self.get_success(
+            self.store.get_account_data_for_room(self.creator, room_id)
+        )
+        assert room_account_data == {
+            MANAGED_ROOM_TYPE: {"groups": [test_group]}
+        }, room_account_data
+
+
+class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
+    @patch(
+        "famedly_control_synapse.client.FamedlyControlClient.get_group_members",
+        new_callable=AsyncMock,
+    )
+    def test_update_group_to_managed_room(self, mock_get_group_members) -> None:
+        """Tests that managed room which already have groups can be updated and the
+        account data is updated correctly."""
+
+        test_old_group = "test_old_group"
+        test_member_1 = self.register_user("test_member_1", "password")
+        test_member_2 = self.register_user("test_member_2", "password")
+        old_group_members = [test_member_1, test_member_2]
+
+        test_new_group = "test_new_group"
+        test_member_3 = self.register_user("test_member_3", "password")
+        new_group_members = [test_member_2, test_member_3]
+
+        # Configure mock to return different values based on group_id
+        def get_members_by_group(group_id):
+            if group_id == test_old_group:
+                return old_group_members
+            elif group_id == test_new_group:
+                return new_group_members
+            return []
+
+        mock_get_group_members.side_effect = get_members_by_group
+
+        room_id = self._create_managed_room(
+            name="Test Room with Group Members", groups=[test_old_group]
+        )
+        self._test_get_membership(room_id, old_group_members, expect_code=200)
+        room_account_data = self.get_success(
+            self.store.get_account_data_for_room(self.creator, room_id)
+        )
+        assert room_account_data == {
+            MANAGED_ROOM_TYPE: {"groups": [test_old_group]}
+        }, room_account_data
+
+        # Now update the new group
         channel = self.make_request(
             method="POST",
             path=self.BASE_PATH + f"/{room_id}/groups",
-            content={"groups": test_groups},
+            content={"groups": [test_new_group]},
             access_token=self.creator_access_token,
             shorthand=False,
         )
         assert channel.code == HTTPStatus.OK, channel.result
-        assert (
-            channel.json_body["groups"] == test_groups
-        ), "Response should contain the assigned groups"
 
-        # Check if account data is updated with the assigned group
-        account_data = self.get_success(
+        # Check if the new member of the group is joined to the room
+        for member in new_group_members:
+            path = f"/_matrix/client/v3/rooms/{room_id}/state/m.room.member/{member}"
+            channel = self.make_request(
+                "GET", path, access_token=self.creator_access_token
+            )
+            assert (
+                channel.code == HTTPStatus.OK
+            ), f"Expected 200 but got {channel.code} for member {member}"
+            assert (
+                channel.json_body["membership"] == "join"
+            ), f"Expected membership to be join but got {channel.json_body['membership']} for member {member}"
+
+        # Check if the old member who is not in the new group is removed from the room
+        path = f"/_matrix/client/v3/rooms/{room_id}/state/m.room.member/{test_member_1}"
+        channel = self.make_request("GET", path, access_token=self.creator_access_token)
+        assert (
+            channel.code == HTTPStatus.OK
+        ), f"Expected 200 but got {channel.code} for member {test_member_1}"
+        assert (
+            channel.json_body["membership"] == "leave"
+        ), f"Expected membership to be leave but got {channel.json_body['membership']} for member {test_member_1}"
+
+        # Check the account data is updated
+        room_account_data = self.get_success(
             self.store.get_account_data_for_room(self.creator, room_id)
         )
-        assert account_data == {
-            MANAGED_ROOM_TYPE: {"groups": test_groups}
-        }, "Account data should be updated with the assigned group"
+        assert room_account_data == {
+            MANAGED_ROOM_TYPE: {"groups": [test_new_group]}
+        }, room_account_data
 
 
 class TestListManagedRooms(ModuleApiTestCase):

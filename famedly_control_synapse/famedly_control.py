@@ -17,6 +17,7 @@ from typing import Any
 
 from synapse.module_api import ModuleApi
 
+from famedly_control_synapse.client import FamedlyControlClient
 from famedly_control_synapse.config import FamedlyControlConfig
 from famedly_control_synapse.rest.room import (
     MANAGED_ROOM_API_PREFIX,
@@ -37,14 +38,23 @@ class FamedlyControl:
         self.server_name = api.server_name
         self.clock = api._hs.get_clock()
         self.config = config
+        self.famedly_control_client = FamedlyControlClient(self.api, config)
         root_resource = RootResource()
         root_resource.putChild(
-            b"createRoom", CreateManagedRoomResource(self.api, self.config)
+            b"createRoom",
+            CreateManagedRoomResource(
+                self.api, self.config, self.famedly_control_client
+            ),
         )
         root_resource.putChild(
-            b"rooms", ListManagedRoomsResource(self.api, self.config)
+            b"rooms",
+            ListManagedRoomsResource(
+                self.api, self.config, self.famedly_control_client
+            ),
         )
-        root_resource._room_id_router = RoomIdRouter(self.api, self.config)
+        root_resource._room_id_router = RoomIdRouter(
+            self.api, self.config, self.famedly_control_client
+        )
         self.api.register_web_resource(MANAGED_ROOM_API_PREFIX, root_resource)
 
         logger.info("Module initialized")

@@ -108,10 +108,21 @@ class ModuleApiTestCase(synapsetest.HomeserverTestCase):
                         "contact": "info@famedly.com",
                         "url": "http://dummy.test/famedlyControl",
                         "access_token": "dummy_token_for_testing",
+                        "api_key": "dummy_api_key_for_testing",
                     },
                 }
             ]
         return conf
+
+    def _test_get_membership(
+        self, room: str, members: list[str], expect_code: int = 200
+    ) -> None:
+        for member in members:
+            path = "/rooms/%s/state/m.room.member/%s" % (room, member)
+            channel = self.make_request(
+                "GET", path, access_token=self.creator_access_token
+            )
+            self.assertEqual(expect_code, channel.code)
 
     def _create_managed_room(
         self, name: str = "Test Room", groups: list[str] | None = None
