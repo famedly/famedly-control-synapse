@@ -2,6 +2,7 @@ import logging
 
 from pydantic import ValidationError
 from synapse.api.constants import CREATOR_POWER_LEVEL
+from synapse.api.errors import SynapseError
 from synapse.api.room_versions import KNOWN_ROOM_VERSIONS
 from synapse.http.server import DirectServeJsonResource
 from synapse.http.servlet import (
@@ -11,12 +12,16 @@ from synapse.http.servlet import (
 )
 from synapse.http.site import SynapseRequest
 from synapse.module_api import ModuleApi
-from synapse.types import JsonDict, Requester, create_requester
+from synapse.types import JsonDict, Requester, RoomID, create_requester
 
 from famedly_control_synapse.client import FamedlyControlClient
 from famedly_control_synapse.config import FamedlyControlConfig
 from famedly_control_synapse.repository import ManagedRoomRepository
-from famedly_control_synapse.types import MANAGED_ROOM_TYPE, CreateManagedRoomRequest
+from famedly_control_synapse.types import (
+    MANAGED_ROOM_TYPE,
+    AssignGroupsToManagedRoomRequest,
+    CreateManagedRoomRequest,
+)
 
 MANAGED_ROOM_API_PREFIX = "/_famedlyControl/v1/managedRooms"
 
@@ -35,7 +40,14 @@ class RoomIdRouter(DirectServeJsonResource):
 
     def getChild(self, path: bytes, _):
         """Handle /{room_id}/... pattern."""
-        room_id = path.decode("utf-8")
+        try:
+            room_id = path.decode("utf-8")
+            # Validate room_id format to prevent malicious input
+            RoomID.from_string(room_id)
+        except SynapseError:
+            # Return error resource for invalid room IDs
+            return 400, {"error": "Invalid room ID format"}
+
         room_resource = DirectServeJsonResource()
         room_resource.putChild(
             b"groups",
@@ -94,7 +106,9 @@ class ManagedRoomResource(DirectServeJsonResource):
                 )
 
             except Exception as e:
-                logging.error("Failed to update room membership for %s: %s", member, e)
+                logging.exception(
+                    "Failed to update room membership for %s: %s", member, e
+                )
 
 
 class CreateManagedRoomResource(ManagedRoomResource):
@@ -175,14 +189,11 @@ class AssignGroupsToManagedRoomResource(ManagedRoomResource):
         if not await self.api.is_user_admin(user_id):
             return 403, {"error": "user is not administrator"}
 
-        # Get the original groups from room account data and remove old data
+        # Get the original groups from room account data
         old_groups_info = await self.api._store.get_account_data_for_room_and_type(
             user_id, self.room_id, MANAGED_ROOM_TYPE
         )
         old_groups = old_groups_info.get("groups", []) if old_groups_info else []
-        await self.account_data_handler.remove_account_data_for_room(
-            user_id, self.room_id, MANAGED_ROOM_TYPE
-        )
 
         # Get the individuals of the old group
         old_members = set()
@@ -191,9 +202,18 @@ class AssignGroupsToManagedRoomResource(ManagedRoomResource):
             old_members.update(members)
 
         # New groups to be added
-        new_groups = parse_json_object_from_request(request).get("groups", [])
+        try:
+            validated_input = AssignGroupsToManagedRoomRequest.model_validate(
+                parse_json_object_from_request(request)
+            )
+        except ValidationError as e:
+            errors = [
+                {"loc": err.get("loc"), "msg": err.get("msg")} for err in e.errors()
+            ]
+            return 400, {"error": "Invalid request body", "details": errors}
+
         new_members = set()
-        for group_id in new_groups:
+        for group_id in validated_input.groups:
             members = await self.client.get_group_members(group_id)
             new_members.update(members)
 
@@ -217,13 +237,16 @@ class AssignGroupsToManagedRoomResource(ManagedRoomResource):
         )
 
         # Update room account data with new groups information
+        await self.account_data_handler.remove_account_data_for_room(
+            user_id, self.room_id, MANAGED_ROOM_TYPE
+        )
         await self.account_data_handler.add_account_data_to_room(
             user_id,
             self.room_id,
             MANAGED_ROOM_TYPE,
-            {"groups": new_groups},
+            {"groups": validated_input.groups},
         )
-        return 200, {"room_id": self.room_id, "groups": new_groups}
+        return 200, {"room_id": self.room_id, "groups": validated_input.groups}
 
 
 class ListManagedRoomsResource(ManagedRoomResource):

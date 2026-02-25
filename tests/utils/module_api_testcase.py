@@ -117,6 +117,8 @@ class ModuleApiTestCase(synapsetest.HomeserverTestCase):
     def _test_get_membership(
         self, room: str, members: list[str], expect_code: int = 200
     ) -> None:
+        """Helper method to check the membership of a room.
+        Returns 200 if the user is a member. If not, returns 403 accordingly."""
         for member in members:
             path = "/rooms/%s/state/m.room.member/%s" % (room, member)
             channel = self.make_request(
@@ -127,6 +129,9 @@ class ModuleApiTestCase(synapsetest.HomeserverTestCase):
     def _create_managed_room(
         self, name: str = "Test Room", groups: list[str] | None = None
     ) -> str:
+        """Helper method to create a managed room with groups.
+        At the moment requires mock for the get_group_members
+        Returns room ID of the created room."""
         self._room_counter += 1
         config = CreateManagedRoomRequest(
             room_alias_name=f"test_room_{self._room_counter}",

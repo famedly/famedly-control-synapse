@@ -82,3 +82,11 @@ class CreateManagedRoomRequest(BaseModel):
     )
 
     model_config = ConfigDict(extra="forbid")
+
+
+class AssignGroupsToManagedRoomRequest(BaseModel):
+    """Request body for assigning groups to a managed room."""
+
+    groups: list[str]
+
+    model_config = ConfigDict(extra="forbid")

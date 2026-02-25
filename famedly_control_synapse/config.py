@@ -32,7 +32,7 @@ class FamedlyControlConfig(BaseModel):
         description="API key for authenticating with Famedly Control API",
     )
 
-    @field_validator("access_token")
+    @field_validator("access_token", "api_key")
     @classmethod
     def validate_access_token(cls, v: str) -> str:
         if not v.strip():

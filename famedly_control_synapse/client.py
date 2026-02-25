@@ -19,6 +19,5 @@ class FamedlyControlClient:
             )
         except Exception as e:
             # Handle exceptions such as network errors or invalid responses
-            logging.error(f"Error fetching group members: {e}")
-            return []
+            logging.exception(f"Error fetching group members: {e}")
         return response.get("members", [])

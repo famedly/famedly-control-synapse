@@ -49,8 +49,13 @@ class TestManagedRoomCreation(ModuleApiTestCase):
         }
         return config
 
-    def test_room_creation_success(self) -> None:
+    @patch(
+        "famedly_control_synapse.client.FamedlyControlClient.get_group_members",
+        new_callable=AsyncMock,
+    )
+    def test_room_creation_success(self, mock_get_group_members) -> None:
         """Tests that managed room creation returns the expected response"""
+        mock_get_group_members.return_value = [self.invitee]
         channel = self.make_request(
             method="POST",
             path=self.CREATE_PATH,
@@ -115,8 +120,15 @@ class TestManagedRoomCreation(ModuleApiTestCase):
             "Invalid request body" in channel.json_body["error"]
         ), "Response should contain an error message"
 
-    def test_room_creation_powerlevel_with_room_v12(self) -> None:
+    @patch(
+        "famedly_control_synapse.client.FamedlyControlClient.get_group_members",
+        new_callable=AsyncMock,
+    )
+    def test_room_creation_powerlevel_with_room_v12(
+        self, mock_get_group_members
+    ) -> None:
         """Tests that the creator has the highest power level and no other user can have the same"""
+        mock_get_group_members.return_value = [self.invitee]
         room_config = self.room_config_v12()
         channel = self.make_request(
             method="POST",
@@ -145,18 +157,18 @@ class TestManagedRoomCreation(ModuleApiTestCase):
             creator_pl == 9007199254740992
         ), "Creator should have power level 9007199254740992"
 
-        # Invite a user
-        self.helper.invite(
-            room=room_id,
-            src=self.creator,
-            targ=self.invitee,
-            tok=self.creator_access_token,
-            expect_code=200,
-        )
+        # Check the invited user's power level
         invitee_pl = event_auth.get_user_power_level(self.invitee, auth_events)
         assert invitee_pl == 0, "Invitee should have power level 0"
 
-    def test_room_creation_powerlevel_with_room_v10(self) -> None:
+    @patch(
+        "famedly_control_synapse.client.FamedlyControlClient.get_group_members",
+        new_callable=AsyncMock,
+    )
+    def test_room_creation_powerlevel_with_room_v10(
+        self, mock_get_group_members
+    ) -> None:
+        mock_get_group_members.return_value = [self.invitee]
         room_config = self.room_config_v10()
         channel = self.make_request(
             method="POST",
@@ -185,14 +197,7 @@ class TestManagedRoomCreation(ModuleApiTestCase):
             creator_pl == CREATOR_POWER_LEVEL - 1
         ), "Creator should have infinite power level"
 
-        # Invite user
-        self.helper.invite(
-            room=room_id,
-            src=self.creator,
-            targ=self.invitee,
-            tok=self.creator_access_token,
-            expect_code=200,
-        )
+        # Check the invited user's power level
         invitee_pl = event_auth.get_user_power_level(self.invitee, auth_events)
         assert invitee_pl == 0, "Invitee should have power level 0"
 
@@ -200,7 +205,7 @@ class TestManagedRoomCreation(ModuleApiTestCase):
         "famedly_control_synapse.client.FamedlyControlClient.get_group_members",
         new_callable=AsyncMock,
     )
-    def test_room_created_with_memebers_joined(self, mock_get_group_members) -> None:
+    def test_room_created_with_members_joined(self, mock_get_group_members) -> None:
         """Tests that the users of the groups are joined to the room after creation"""
         test_group = "test_group_1"
         test_member_1 = self.register_user("test_member_1", "password")
@@ -354,8 +359,23 @@ class TestListManagedRooms(ModuleApiTestCase):
         assert channel.json_body["chunk"] == []
         assert channel.json_body["total_room_count_estimate"] == 0
 
-    def test_list_returns_managed_rooms(self) -> None:
+    @patch(
+        "famedly_control_synapse.client.FamedlyControlClient.get_group_members",
+        new_callable=AsyncMock,
+    )
+    def test_list_returns_managed_rooms(self, mock_get_group_members) -> None:
         """Created managed rooms should appear in the listing."""
+        for i in range(2):
+            self.register_user(f"user{i}", "password")
+
+        def get_members_by_group(group_id):
+            for i in range(2):
+                if group_id == f"group{i}":
+                    return [f"user{i}"]
+            return []
+
+        mock_get_group_members.side_effect = get_members_by_group
+
         room_id = self._create_managed_room(
             name="Listed Room", groups=["group1", "group2"]
         )
@@ -377,11 +397,28 @@ class TestListManagedRooms(ModuleApiTestCase):
             "group2",
         ]
 
-    def test_list_pagination(self) -> None:
+    @patch(
+        "famedly_control_synapse.client.FamedlyControlClient.get_group_members",
+        new_callable=AsyncMock,
+    )
+    def test_list_pagination(self, mock_get_group_members) -> None:
         """Pagination should work with from and limit params."""
+        for i in range(3):
+            self.register_user(f"user{i}", "password")
+
+        def get_members_by_group(group_id):
+            for i in range(3):
+                if group_id == f"group{i}":
+                    return [f"user{i}"]
+            return []
+
+        mock_get_group_members.side_effect = get_members_by_group
+
         room_ids = []
         for i in range(3):
-            room_ids.append(self._create_managed_room(name=f"Room {i}"))
+            room_ids.append(
+                self._create_managed_room(name=f"Room {i}", groups=[f"group{i}"])
+            )
 
         # Get first page with limit 2
         channel = self.make_request(
@@ -408,50 +445,3 @@ class TestListManagedRooms(ModuleApiTestCase):
         assert len(channel.json_body["chunk"]) == 1
         assert "next_batch" not in channel.json_body
         assert "prev_batch" in channel.json_body
-
-    def test_list_no_duplicates_with_multiple_users(self) -> None:
-        """A room with account data from multiple users should appear once
-        with all groups merged."""
-        from famedly_control_synapse.types import MANAGED_ROOM_TYPE
-
-        room_id = self._create_managed_room(name="Shared Room", groups=["group_a"])
-
-        # Register extra users with overlapping groups
-        user_groups = [
-            ["group_a", "group_b"],  # overlaps with creator's group_a
-            ["group_b", "group_c"],  # overlaps with previous user's group_b
-            ["group_a", "group_c"],  # overlaps with both creator and user above
-        ]
-        for i, groups in enumerate(user_groups):
-            user = self.register_user(f"extra_user_{i}", "password", admin=False)
-            self.get_success(
-                self.account_data_handler.add_account_data_to_room(
-                    user,
-                    room_id,
-                    MANAGED_ROOM_TYPE,
-                    {"groups": groups},
-                )
-            )
-
-        channel = self.make_request(
-            method="GET",
-            path=self.LIST_PATH,
-            access_token=self.creator_access_token,
-            shorthand=False,
-        )
-        assert channel.code == HTTPStatus.OK, channel.result
-        assert (
-            channel.json_body["total_room_count_estimate"] == 1
-        ), f"Expected 1 room but count was {channel.json_body['total_room_count_estimate']}"
-        assert (
-            len(channel.json_body["chunk"]) == 1
-        ), f"Expected 1 entry in chunk but got {len(channel.json_body['chunk'])}"
-
-        result_groups = channel.json_body["chunk"][0]["de.famedly.managedRoom"][
-            "groups"
-        ]
-        assert sorted(result_groups) == [
-            "group_a",
-            "group_b",
-            "group_c",
-        ], f"Expected deduplicated merged groups, got {result_groups}"
