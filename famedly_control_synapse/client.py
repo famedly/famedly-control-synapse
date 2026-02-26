@@ -21,3 +21,5 @@ class FamedlyControlClient:
             # Handle exceptions such as network errors or invalid responses
             logging.exception(f"Error fetching group members: {e}")
         return response.get("members", [])
+
+    # TODO: convert the zitadel user ids into the synapse id, uisng the token authenticator
