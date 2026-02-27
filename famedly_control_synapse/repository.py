@@ -86,6 +86,15 @@ class ManagedRoomRepository:
 
         return [self._row_to_room_entry(row) for row in rows]
 
+    async def is_managed_room(self, room_id: str) -> bool:
+        rows = await self._store.db_pool.execute(
+            "is_managed_room",
+            "SELECT 1 FROM room_account_data WHERE room_id = ? AND account_data_type = ? LIMIT 1",
+            room_id,
+            MANAGED_ROOM_TYPE,
+        )
+        return bool(rows)
+
     @staticmethod
     def _row_to_room_entry(row: tuple) -> JsonDict:
         (
