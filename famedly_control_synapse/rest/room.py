@@ -74,10 +74,10 @@ class CreateManagedRoomResource(RestServlet):
         try:
             validated_room_config = CreateManagedRoomRequest.model_validate(room_config)
         except ValidationError as e:
-            errors = [
+            validation_error = [
                 {"loc": err.get("loc"), "msg": err.get("msg")} for err in e.errors()
             ]
-            return 400, {"error": "Invalid request body", "details": errors}
+            return 400, {"error": "Invalid request body", "details": validation_error}
 
         room_version = KNOWN_ROOM_VERSIONS.get(validated_room_config.room_version)
         if room_version is None:
@@ -103,12 +103,22 @@ class CreateManagedRoomResource(RestServlet):
             {"groups": validated_room_config.groups},
         )
 
-        members = []
+        member_external_ids = set()
         for group_id in validated_room_config.groups:
             group_diff = await self.client.get_group_members(group_id)
-            members.extend(group_diff)
+            member_external_ids.update(group_diff)
 
-        await self.room_handler.force_join_users_to_room(room_id, members, requester)
+        join_errors = await self.room_handler.force_join_users_to_room(
+            room_id, list(member_external_ids), requester
+        )
+        if join_errors:
+            logger.warning(
+                "Some members failed to join room %s: %s", room_id, join_errors
+            )
+            return 207, {
+                "error": "Failed to add some members to the room",
+                "details": join_errors,
+            }
 
         return 200, {"room_id": room_id}
 
@@ -184,7 +194,7 @@ class AssignGroupsToManagedRoomResource(RestServlet):
         # Validate room_id format to prevent malicious input
         try:
             RoomID.from_string(room_id)
-            # TODO: add case the room does not eixists
+            # TODO: add case the room does not exists
             # TODO: add case room that isn't a managed room
         except SynapseError:
             return 400, {"error": "Invalid room ID format. Expected a Matrix room ID."}
@@ -206,10 +216,10 @@ class AssignGroupsToManagedRoomResource(RestServlet):
                 parse_json_object_from_request(request)
             )
         except ValidationError as e:
-            errors = [
+            validation_error = [
                 {"loc": err.get("loc"), "msg": err.get("msg")} for err in e.errors()
             ]
-            return 400, {"error": "Invalid request body", "details": errors}
+            return 400, {"error": "Invalid request body", "details": validation_error}
 
         # TODO: This approach will change again after the API design is finalized.
         # There will be a separate endpoint for just fetching current group members
@@ -220,51 +230,66 @@ class AssignGroupsToManagedRoomResource(RestServlet):
         new_groups = set(validated_input.groups) - remaining_groups
         removed_groups = set(old_groups) - remaining_groups
 
-        members_to_add: set[str] = set()
-        members_to_remove: set[str] = set()
+        existing_members_external_ids = set()
+        members_to_add_external_ids: set[str] = set()
+        members_to_remove_external_ids: set[str] = set()
 
-        # 2. For the remaining groups, get the diff and add all the ADD members, remove all the REM members.
+        # 2. For the remaining groups, get the diff and skip all existing ADD members, remove all the REM members.
+        # TODO consider the case where there are newly added memebers
         for group_id in remaining_groups:
             # TODO: figure out the sync handling for each group.
+            members = await self.client.get_group_members(group_id)
+            existing_members_external_ids.update(members)
             group_diff = await self.client.get_group_diff(
                 group_id, sync="something", timeout=30
             )
-            members_to_add.update(
+            members_to_add_external_ids.update(
                 record.user_id
                 for record in group_diff.data
                 if record.action == Membership.ADD
             )
-            members_to_remove.update(
+            members_to_remove_external_ids.update(
                 record.user_id
                 for record in group_diff.data
                 if record.action == Membership.REM
             )
-
         # 3. For the new groups, add all the ADD members, skip the removed
         for group_id in new_groups:
             members = await self.client.get_group_members(group_id)
-            members_to_add.update(members)
+            members_to_add_external_ids.update(members)
+        members_to_add_external_ids -= existing_members_external_ids
 
         # 4. For the removed groups, fetch all and kick them out.
         for group_id in removed_groups:
             members = await self.client.get_group_members(group_id)
-            members_to_remove.update(members)
+            members_to_remove_external_ids.update(members)
 
         # Kick out members who are no longer in the group
         # TODO: prevent kicking out the room creator
-        for member in members_to_remove:
-            await self.api.update_room_membership(
-                sender=user_id,
-                target=member,
-                room_id=room_id,
-                new_membership="leave",
-                content={"reason": "Group has been removed from the room"},
+        leave_errors = await self.room_handler.remove_users_from_room(
+            user_id, list(members_to_remove_external_ids), room_id
+        )
+        if leave_errors:
+            logger.warning(
+                "Some members failed to leave room %s: %s", room_id, leave_errors
             )
+            return 207, {
+                "error": "Failed to remove some members from the room",
+                "details": leave_errors,
+            }
 
         # Add new members
-        await self.room_handler.force_join_users_to_room(
-            room_id, list(members_to_add), requester
+        join_errors = await self.room_handler.force_join_users_to_room(
+            room_id, list(members_to_add_external_ids), requester
         )
+        if join_errors:
+            logger.warning(
+                "Some members failed to join room %s: %s", room_id, join_errors
+            )
+            return 207, {
+                "error": "Failed to add some members to the room",
+                "details": join_errors,
+            }
 
         # Update room account data with new groups information
         await self.update_room_account_data(user_id, room_id, validated_input.groups)

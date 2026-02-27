@@ -96,9 +96,6 @@ class FamedlyControlClient:
             )
             if "Ok" in response:
                 return GroupDiffResponse.model_validate(response["Ok"])
-            elif "Err" in response:
-                error = response["Err"]
-                raise Exception(f"API error: {error}")
             else:
                 raise Exception(f"Unexpected response: {response}")
 
@@ -137,9 +134,6 @@ class FamedlyControlClient:
             )
             if "Ok" in response:
                 return ManyGroupsDiffResponse.model_validate(response["Ok"])
-            elif "Err" in response:
-                error = response["Err"]
-                raise Exception(f"API error: {error}")
             else:
                 raise Exception(f"Unexpected response: {response}")
 

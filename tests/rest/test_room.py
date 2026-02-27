@@ -62,7 +62,9 @@ class TestManagedRoomCreation(ModuleApiTestCase):
         self, mock_batch_convert, mock_get_group_members
     ) -> None:
         """Tests that managed room creation returns the expected response"""
-        mock_get_group_members.return_value = [self.invitee]
+        mock_get_group_members.return_value = [
+            self.invitee
+        ]  # in real case this should be external_ids
         mock_batch_convert.side_effect = lambda x: x
         channel = self.make_request(
             method="POST",
@@ -140,7 +142,9 @@ class TestManagedRoomCreation(ModuleApiTestCase):
         self, mock_batch_convert, mock_get_group_members
     ) -> None:
         """Tests that the creator has the highest power level and no other user can have the same"""
-        mock_get_group_members.return_value = [self.invitee]
+        mock_get_group_members.return_value = [
+            self.invitee
+        ]  # in real case this should be external_ids
         mock_batch_convert.side_effect = lambda x: x
         room_config = self.room_config_v12()
         channel = self.make_request(
@@ -185,7 +189,9 @@ class TestManagedRoomCreation(ModuleApiTestCase):
     def test_room_creation_powerlevel_with_room_v10(
         self, mock_batch_convert, mock_get_group_members
     ) -> None:
-        mock_get_group_members.return_value = [self.invitee]
+        mock_get_group_members.return_value = [
+            self.invitee
+        ]  # in real case this should be external_ids
         mock_batch_convert.side_effect = lambda x: x
         room_config = self.room_config_v10()
         channel = self.make_request(
@@ -235,7 +241,9 @@ class TestManagedRoomCreation(ModuleApiTestCase):
         test_member_1 = self.register_user("test_member_1", "password")
         test_member_2 = self.register_user("test_member_2", "password")
         group_members = [test_member_1, test_member_2]
-        mock_get_group_members.return_value = group_members
+        mock_get_group_members.return_value = (
+            group_members  # in real case this should be external_ids
+        )
         mock_batch_convert.side_effect = lambda x: x
 
         # Create a managed room with a group that has members
@@ -293,7 +301,7 @@ class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
         test_member_3 = self.register_user("test_member_3", "password")
         new_group_members = [test_member_2, test_member_3]
 
-        def get_group_members(group_id):
+        def get_group_members(group_id):  # in real case this should return external_ids
             if group_id == test_old_group:
                 return old_group_members
             elif group_id == test_new_group:
@@ -396,7 +404,9 @@ class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
         old_group_info = [test_group_1]
         new_group_info = [test_group_1, test_group_2, test_group_3]
 
-        def get_members_by_group(group_id):
+        def get_members_by_group(
+            group_id,
+        ):  # in real case this should return external_ids
             if group_id == test_group_1:
                 # This is used for initial room creation
                 return test_group_1_members
@@ -414,8 +424,8 @@ class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
                 return GroupDiffResponse(
                     next_sync="something",
                     data=[
-                        DiffRecord(user_id=test_member_a, action=Membership.ADD),
-                        DiffRecord(user_id=test_member_b, action=Membership.ADD),
+                        # in real case user_id should be external_ids
+                        # This is diff endpoint so skip the members who were already there.
                         DiffRecord(user_id=test_member_r, action=Membership.REM),
                     ],
                 )
@@ -532,7 +542,9 @@ class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
         old_group_info = [test_group_1, test_group_2, test_group_3]
         new_group_info = [test_group_1, test_group_4]
 
-        def get_members_by_group(group_id):
+        def get_members_by_group(
+            group_id,
+        ):  # in real case this should return external_ids
             if group_id == test_group_1:
                 # This is used for initial room creation
                 return test_group_1_members
@@ -552,8 +564,8 @@ class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
                 return GroupDiffResponse(
                     next_sync="something",
                     data=[
-                        DiffRecord(user_id=test_member_a, action=Membership.ADD),
-                        DiffRecord(user_id=test_member_b, action=Membership.ADD),
+                        # in real case user_id should be external_ids
+                        # This is Diff endpoint so skip the members who were already there.
                         DiffRecord(user_id=test_member_r, action=Membership.REM),
                     ],
                 )
@@ -561,6 +573,7 @@ class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
                 return GroupDiffResponse(
                     next_sync="something",
                     data=[
+                        # in real case user_id should be external_ids
                         DiffRecord(user_id=test_member_c, action=Membership.ADD),
                     ],
                 )
@@ -568,6 +581,7 @@ class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
                 return GroupDiffResponse(
                     next_sync="something",
                     data=[
+                        # in real case user_id should be external_ids
                         DiffRecord(user_id=test_member_d, action=Membership.ADD),
                         DiffRecord(user_id=test_member_e, action=Membership.ADD),
                     ],
@@ -691,13 +705,16 @@ class TestListManagedRooms(ModuleApiTestCase):
         self, mock_batch_convert, mock_get_group_members
     ) -> None:
         """Created managed rooms should appear in the listing."""
-        for i in range(2):
-            self.register_user(f"user{i}", "password")
+        user_1 = self.register_user("user1", "password")
+        user_2 = self.register_user("user2", "password")
 
-        def get_members_by_group(group_id):
-            for i in range(2):
-                if group_id == f"group{i}":
-                    return [f"user{i}"]
+        def get_members_by_group(
+            group_id,
+        ):  # in real case this should return external_ids
+            if group_id == "group1":
+                return [user_1]
+            if group_id == "group2":
+                return [user_2]
             return []
 
         mock_get_group_members.side_effect = get_members_by_group
@@ -734,13 +751,19 @@ class TestListManagedRooms(ModuleApiTestCase):
     )
     def test_list_pagination(self, mock_batch_convert, mock_get_group_members) -> None:
         """Pagination should work with from and limit params."""
-        for i in range(3):
-            self.register_user(f"user{i}", "password")
+        user_1 = self.register_user("user1", "password")
+        user_2 = self.register_user("user2", "password")
+        user_3 = self.register_user("user3", "password")
 
-        def get_members_by_group(group_id):
-            for i in range(3):
-                if group_id == f"group{i}":
-                    return [f"user{i}"]
+        def get_members_by_group(
+            group_id,
+        ):  # in real case this should return external_ids
+            if group_id == "group1":
+                return [user_1]
+            if group_id == "group2":
+                return [user_2]
+            if group_id == "group3":
+                return [user_3]
             return []
 
         mock_get_group_members.side_effect = get_members_by_group
