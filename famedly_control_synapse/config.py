@@ -31,10 +31,11 @@ class FamedlyControlConfig(BaseModel):
         min_length=1,
         description="API key for authenticating with Famedly Control API",
     )
+    auth_provider: str
 
     @field_validator("access_token", "api_key")
     @classmethod
-    def validate_access_token(cls, v: str) -> str:
+    def validate_token_fields(cls, v: str) -> str:
         if not v.strip():
             raise ValueError("access_token cannot be empty or whitespace-only")
         return v

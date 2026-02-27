@@ -1,3 +1,4 @@
+import logging
 import re
 from typing import Iterable, Pattern
 
@@ -15,7 +16,7 @@ from synapse.http.site import SynapseRequest
 from synapse.module_api import ModuleApi
 from synapse.types import JsonDict, RoomID
 
-from famedly_control_synapse.client import FamedlyControlClient
+from famedly_control_synapse.client import FamedlyControlClient, Membership
 from famedly_control_synapse.repository import ManagedRoomRepository
 from famedly_control_synapse.room_handler import ManagedRoomHandler
 from famedly_control_synapse.types import (
@@ -25,6 +26,7 @@ from famedly_control_synapse.types import (
 )
 
 MANAGED_ROOM_API_PREFIX = "/_famedlyControl/v1/managedRooms"
+logger = logging.getLogger(__name__)
 
 
 def famedly_control_patterns(path_regex: str) -> Iterable[Pattern]:
@@ -37,7 +39,7 @@ def famedly_control_patterns(path_regex: str) -> Iterable[Pattern]:
     Returns:
         A list of regex patterns.
     """
-    famedly_control_prefix = "^/_famedlyControl/v1/managedRooms"
+    famedly_control_prefix = "^" + MANAGED_ROOM_API_PREFIX
     patterns = [re.compile(famedly_control_prefix + path_regex)]
     return patterns
 
@@ -103,8 +105,9 @@ class CreateManagedRoomResource(RestServlet):
 
         members = []
         for group_id in validated_room_config.groups:
-            group_members = await self.client.get_group_members(group_id)
-            members.extend(group_members)
+            group_diff = await self.client.get_group_members(group_id)
+            members.extend(group_diff)
+
         await self.room_handler.force_join_users_to_room(room_id, members, requester)
 
         return 200, {"room_id": room_id}
@@ -178,31 +181,26 @@ class AssignGroupsToManagedRoomResource(RestServlet):
         self, request: SynapseRequest, room_id: str
     ) -> tuple[int, JsonDict]:
         """Handle POST requests to assign groups to a managed room."""
+        # Validate room_id format to prevent malicious input
         try:
-            # Validate room_id format to prevent malicious input
             RoomID.from_string(room_id)
+            # TODO: add case the room does not eixists
+            # TODO: add case room that isn't a managed room
         except SynapseError:
-            # Return error resource for invalid room IDs
-            return 400, {"error": "Invalid room ID format"}
+            return 400, {"error": "Invalid room ID format. Expected a Matrix room ID."}
 
         requester = await self.api.get_user_by_req(request)
         user_id = requester.user.to_string()
         if not await self.api.is_user_admin(user_id):
             return 403, {"error": "user is not administrator"}
 
-        # Get the original groups from room account data
+        # Get the current groups information
         old_groups_info = await self.api._store.get_account_data_for_room_and_type(
             user_id, room_id, MANAGED_ROOM_TYPE
         )
         old_groups = old_groups_info.get("groups", []) if old_groups_info else []
 
-        # Get the individuals of the old group
-        old_members = set()
-        for group_id in old_groups:
-            members = await self.client.get_group_members(group_id)
-            old_members.update(members)
-
-        # New groups to be added
+        # New groups information from the request body
         try:
             validated_input = AssignGroupsToManagedRoomRequest.model_validate(
                 parse_json_object_from_request(request)
@@ -213,16 +211,47 @@ class AssignGroupsToManagedRoomResource(RestServlet):
             ]
             return 400, {"error": "Invalid request body", "details": errors}
 
-        new_members = set()
-        for group_id in validated_input.groups:
+        # TODO: This approach will change again after the API design is finalized.
+        # There will be a separate endpoint for just fetching current group members
+        # The diff endpoint will be used for periodic sync instead of this on-demand approach.
+
+        # 1. Define the remaining groups, new groups, and removed groups
+        remaining_groups = set(old_groups) & set(validated_input.groups)
+        new_groups = set(validated_input.groups) - remaining_groups
+        removed_groups = set(old_groups) - remaining_groups
+
+        members_to_add: set[str] = set()
+        members_to_remove: set[str] = set()
+
+        # 2. For the remaining groups, get the diff and add all the ADD members, remove all the REM members.
+        for group_id in remaining_groups:
+            # TODO: figure out the sync handling for each group.
+            group_diff = await self.client.get_group_diff(
+                group_id, sync="something", timeout=30
+            )
+            members_to_add.update(
+                record.user_id
+                for record in group_diff.data
+                if record.action == Membership.ADD
+            )
+            members_to_remove.update(
+                record.user_id
+                for record in group_diff.data
+                if record.action == Membership.REM
+            )
+
+        # 3. For the new groups, add all the ADD members, skip the removed
+        for group_id in new_groups:
             members = await self.client.get_group_members(group_id)
-            new_members.update(members)
+            members_to_add.update(members)
 
-        # Calculate who to remove and who to add
-        members_to_remove = old_members - new_members
-        members_to_add = new_members - old_members
+        # 4. For the removed groups, fetch all and kick them out.
+        for group_id in removed_groups:
+            members = await self.client.get_group_members(group_id)
+            members_to_remove.update(members)
 
-        # Kick out members who are no longer in any group
+        # Kick out members who are no longer in the group
+        # TODO: prevent kicking out the room creator
         for member in members_to_remove:
             await self.api.update_room_membership(
                 sender=user_id,
@@ -232,19 +261,33 @@ class AssignGroupsToManagedRoomResource(RestServlet):
                 content={"reason": "Group has been removed from the room"},
             )
 
-        # Add new members who weren't in the old groups
+        # Add new members
         await self.room_handler.force_join_users_to_room(
             room_id, list(members_to_add), requester
         )
 
         # Update room account data with new groups information
-        await self.account_data_handler.remove_account_data_for_room(
-            user_id, room_id, MANAGED_ROOM_TYPE
-        )
-        await self.account_data_handler.add_account_data_to_room(
-            user_id,
-            room_id,
-            MANAGED_ROOM_TYPE,
-            {"groups": validated_input.groups},
-        )
+        await self.update_room_account_data(user_id, room_id, validated_input.groups)
         return 200, {"room_id": room_id, "groups": validated_input.groups}
+
+    async def update_room_account_data(
+        self, user_id: str, room_id: str, groups: list[str]
+    ) -> None:
+        """Helper method to update the room account data for a user."""
+        try:
+            await self.account_data_handler.remove_account_data_for_room(
+                user_id, room_id, MANAGED_ROOM_TYPE
+            )
+            await self.account_data_handler.add_account_data_to_room(
+                user_id,
+                room_id,
+                MANAGED_ROOM_TYPE,
+                {"groups": groups},
+            )
+        except Exception as e:
+            logger.exception(
+                "Failed to update account data for room %s: %s", room_id, e
+            )
+
+
+# TODO: proper error and exception handling

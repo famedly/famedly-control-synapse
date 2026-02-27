@@ -11,6 +11,7 @@ from synapse.types.state import StateFilter
 from synapse.util.clock import Clock
 from twisted.internet.testing import MemoryReactor
 
+from famedly_control_synapse.client import DiffRecord, GroupDiffResponse, Membership
 from famedly_control_synapse.rest.room import MANAGED_ROOM_TYPE
 from famedly_control_synapse.types import CreateManagedRoomRequest, CreationContent
 from tests.utils.module_api_testcase import ModuleApiTestCase
@@ -53,9 +54,16 @@ class TestManagedRoomCreation(ModuleApiTestCase):
         "famedly_control_synapse.client.FamedlyControlClient.get_group_members",
         new_callable=AsyncMock,
     )
-    def test_room_creation_success(self, mock_get_group_members) -> None:
+    @patch(
+        "famedly_control_synapse.room_handler.ManagedRoomHandler.batch_convert_external_user_ids_to_matrix_user_ids",
+        new_callable=AsyncMock,
+    )
+    def test_room_creation_success(
+        self, mock_batch_convert, mock_get_group_members
+    ) -> None:
         """Tests that managed room creation returns the expected response"""
         mock_get_group_members.return_value = [self.invitee]
+        mock_batch_convert.side_effect = lambda x: x
         channel = self.make_request(
             method="POST",
             path=self.CREATE_PATH,
@@ -124,11 +132,16 @@ class TestManagedRoomCreation(ModuleApiTestCase):
         "famedly_control_synapse.client.FamedlyControlClient.get_group_members",
         new_callable=AsyncMock,
     )
+    @patch(
+        "famedly_control_synapse.room_handler.ManagedRoomHandler.batch_convert_external_user_ids_to_matrix_user_ids",
+        new_callable=AsyncMock,
+    )
     def test_room_creation_powerlevel_with_room_v12(
-        self, mock_get_group_members
+        self, mock_batch_convert, mock_get_group_members
     ) -> None:
         """Tests that the creator has the highest power level and no other user can have the same"""
         mock_get_group_members.return_value = [self.invitee]
+        mock_batch_convert.side_effect = lambda x: x
         room_config = self.room_config_v12()
         channel = self.make_request(
             method="POST",
@@ -165,10 +178,15 @@ class TestManagedRoomCreation(ModuleApiTestCase):
         "famedly_control_synapse.client.FamedlyControlClient.get_group_members",
         new_callable=AsyncMock,
     )
+    @patch(
+        "famedly_control_synapse.room_handler.ManagedRoomHandler.batch_convert_external_user_ids_to_matrix_user_ids",
+        new_callable=AsyncMock,
+    )
     def test_room_creation_powerlevel_with_room_v10(
-        self, mock_get_group_members
+        self, mock_batch_convert, mock_get_group_members
     ) -> None:
         mock_get_group_members.return_value = [self.invitee]
+        mock_batch_convert.side_effect = lambda x: x
         room_config = self.room_config_v10()
         channel = self.make_request(
             method="POST",
@@ -205,13 +223,20 @@ class TestManagedRoomCreation(ModuleApiTestCase):
         "famedly_control_synapse.client.FamedlyControlClient.get_group_members",
         new_callable=AsyncMock,
     )
-    def test_room_created_with_members_joined(self, mock_get_group_members) -> None:
+    @patch(
+        "famedly_control_synapse.room_handler.ManagedRoomHandler.batch_convert_external_user_ids_to_matrix_user_ids",
+        new_callable=AsyncMock,
+    )
+    def test_room_created_with_members_joined(
+        self, mock_batch_convert, mock_get_group_members
+    ) -> None:
         """Tests that the users of the groups are joined to the room after creation"""
         test_group = "test_group_1"
         test_member_1 = self.register_user("test_member_1", "password")
         test_member_2 = self.register_user("test_member_2", "password")
         group_members = [test_member_1, test_member_2]
         mock_get_group_members.return_value = group_members
+        mock_batch_convert.side_effect = lambda x: x
 
         # Create a managed room with a group that has members
         room_id = self._create_managed_room(
@@ -245,9 +270,19 @@ class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
         "famedly_control_synapse.client.FamedlyControlClient.get_group_members",
         new_callable=AsyncMock,
     )
-    def test_update_group_to_managed_room(self, mock_get_group_members) -> None:
+    @patch(
+        "famedly_control_synapse.room_handler.ManagedRoomHandler.batch_convert_external_user_ids_to_matrix_user_ids",
+        new_callable=AsyncMock,
+    )
+    def test_update_single_group_to_single_group(
+        self, mock_batch_convert, mock_get_group_members
+    ) -> None:
         """Tests that managed room which already have groups can be updated and the
         account data is updated correctly."""
+
+        # Remaining groups: x
+        # New groups: test_new_group
+        # Removed groups: test_old_group
 
         test_old_group = "test_old_group"
         test_member_1 = self.register_user("test_member_1", "password")
@@ -258,16 +293,17 @@ class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
         test_member_3 = self.register_user("test_member_3", "password")
         new_group_members = [test_member_2, test_member_3]
 
-        # Configure mock to return different values based on group_id
-        def get_members_by_group(group_id):
+        def get_group_members(group_id):
             if group_id == test_old_group:
                 return old_group_members
             elif group_id == test_new_group:
                 return new_group_members
             return []
 
-        mock_get_group_members.side_effect = get_members_by_group
+        mock_get_group_members.side_effect = get_group_members
+        mock_batch_convert.side_effect = lambda x: x
 
+        # Create a managed room with the old group information
         room_id = self._create_managed_room(
             name="Test Room with Group Members", groups=[test_old_group]
         )
@@ -279,7 +315,7 @@ class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
             MANAGED_ROOM_TYPE: {"groups": [test_old_group]}
         }, room_account_data
 
-        # Now update the new group
+        # Now update the group information
         channel = self.make_request(
             method="POST",
             path=self.BASE_PATH + f"/{room_id}/groups",
@@ -318,6 +354,290 @@ class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
         )
         assert room_account_data == {
             MANAGED_ROOM_TYPE: {"groups": [test_new_group]}
+        }, room_account_data
+
+    @patch(
+        "famedly_control_synapse.client.FamedlyControlClient.get_group_diff",
+        new_callable=AsyncMock,
+    )
+    @patch(
+        "famedly_control_synapse.client.FamedlyControlClient.get_group_members",
+        new_callable=AsyncMock,
+    )
+    @patch(
+        "famedly_control_synapse.room_handler.ManagedRoomHandler.batch_convert_external_user_ids_to_matrix_user_ids",
+        new_callable=AsyncMock,
+    )
+    def test_update_single_group_to_multiple_groups(
+        self, mock_batch_convert, mock_get_group_members, mock_get_group_diff
+    ) -> None:
+
+        # Remaining groups: test_group_1
+        # New groups: test_group_2, test_group_3
+        # Removed groups: x
+
+        test_group_1 = "test_group_1"
+        test_member_a = self.register_user("test_member_a", "password")
+        test_member_b = self.register_user("test_member_b", "password")
+        test_member_r = self.register_user("test_member_r", "password")
+        test_group_1_add_members = [test_member_a, test_member_b]
+        test_group_1_rem_members = [test_member_r]
+        test_group_1_members = test_group_1_add_members + test_group_1_rem_members
+
+        test_group_2 = "test_group_2"
+        test_member_c = self.register_user("test_member_c", "password")
+        test_group_2_members = [test_member_b, test_member_c]
+
+        test_group_3 = "test_group_3"
+        test_member_d = self.register_user("test_member_d", "password")
+        test_member_e = self.register_user("test_member_e", "password")
+        test_group_3_members = [test_member_d, test_member_e]
+
+        old_group_info = [test_group_1]
+        new_group_info = [test_group_1, test_group_2, test_group_3]
+
+        def get_members_by_group(group_id):
+            if group_id == test_group_1:
+                # This is used for initial room creation
+                return test_group_1_members
+            elif group_id == test_group_2:
+                return test_group_2_members
+            elif group_id == test_group_3:
+                return test_group_3_members
+            return []
+
+        mock_get_group_members.side_effect = get_members_by_group
+
+        # Configure mock to return different values based on group_id
+        def get_group_diff(group_id, sync, timeout):
+            if group_id == test_group_1:
+                return GroupDiffResponse(
+                    next_sync="something",
+                    data=[
+                        DiffRecord(user_id=test_member_a, action=Membership.ADD),
+                        DiffRecord(user_id=test_member_b, action=Membership.ADD),
+                        DiffRecord(user_id=test_member_r, action=Membership.REM),
+                    ],
+                )
+
+        mock_get_group_diff.side_effect = get_group_diff
+        mock_batch_convert.side_effect = lambda x: x
+
+        # Create a managed room with the old group information
+        room_id = self._create_managed_room(
+            name="Test Room with Group Members", groups=old_group_info
+        )
+        self._test_get_membership(room_id, test_group_1_members, expect_code=200)
+        room_account_data = self.get_success(
+            self.store.get_account_data_for_room(self.creator, room_id)
+        )
+        assert room_account_data == {
+            MANAGED_ROOM_TYPE: {"groups": old_group_info}
+        }, room_account_data
+
+        # Now update the group information
+        channel = self.make_request(
+            method="POST",
+            path=self.BASE_PATH + f"/{room_id}/groups",
+            content={"groups": new_group_info},
+            access_token=self.creator_access_token,
+            shorthand=False,
+        )
+        assert channel.code == HTTPStatus.OK, channel.result
+
+        member_should_be_in_room = set(
+            test_group_1_add_members + test_group_2_members + test_group_3_members
+        )
+        member_should_not_be_in_room = test_group_1_rem_members
+
+        # Check if the new member of the group is joined to the room
+        for member in member_should_be_in_room:
+            path = f"/_matrix/client/v3/rooms/{room_id}/state/m.room.member/{member}"
+            channel = self.make_request(
+                "GET", path, access_token=self.creator_access_token
+            )
+            assert (
+                channel.code == HTTPStatus.OK
+            ), f"Expected 200 but got {channel.code} for member {member}"
+            assert (
+                channel.json_body["membership"] == "join"
+            ), f"Expected membership to be join but got {channel.json_body['membership']} for member {member}"
+
+        for member in member_should_not_be_in_room:
+            path = f"/_matrix/client/v3/rooms/{room_id}/state/m.room.member/{member}"
+            channel = self.make_request(
+                "GET", path, access_token=self.creator_access_token
+            )
+            assert (
+                channel.code == HTTPStatus.OK
+            ), f"Expected 200 but got {channel.code} for member {member}"
+            assert (
+                channel.json_body["membership"] == "leave"
+            ), f"Expected membership to be leave but got {channel.json_body['membership']} for member {member}"
+
+        # Check the account data is updated
+        room_account_data = self.get_success(
+            self.store.get_account_data_for_room(self.creator, room_id)
+        )
+        assert room_account_data == {
+            MANAGED_ROOM_TYPE: {"groups": new_group_info}
+        }, room_account_data
+
+    @patch(
+        "famedly_control_synapse.client.FamedlyControlClient.get_group_diff",
+        new_callable=AsyncMock,
+    )
+    @patch(
+        "famedly_control_synapse.client.FamedlyControlClient.get_group_members",
+        new_callable=AsyncMock,
+    )
+    @patch(
+        "famedly_control_synapse.room_handler.ManagedRoomHandler.batch_convert_external_user_ids_to_matrix_user_ids",
+        new_callable=AsyncMock,
+    )
+    def test_update_multiple_groups_to_multiple_groups(
+        self, mock_batch_convert, mock_get_group_members, mock_get_group_diff
+    ) -> None:
+        # Remaining groups: test_group_1
+        # New groups: test_group_4
+        # Removed groups: test_group_2, test_group_3
+
+        test_group_1 = "test_group_1"
+        test_member_a = self.register_user("test_member_a", "password")
+        test_member_b = self.register_user("test_member_b", "password")
+        test_member_r = self.register_user("test_member_r", "password")
+        test_group_1_add_members = [test_member_a, test_member_b]
+        test_group_1_rem_members = [test_member_r]
+        test_group_1_members = test_group_1_add_members + test_group_1_rem_members
+
+        test_group_2 = "test_group_2"
+        # TODO: The edge case handling
+        # member b is in both group 1 and 2
+        # and the group 1 is added to the room and group 2 is removed from the room.
+        test_member_c = self.register_user("test_member_c", "password")
+        test_group_2_members = [test_member_c]
+
+        test_group_3 = "test_group_3"
+        test_member_d = self.register_user("test_member_d", "password")
+        test_member_e = self.register_user("test_member_e", "password")
+        test_group_3_members = [test_member_d, test_member_e]
+
+        test_group_4 = "test_group_4"
+        # TODO: The edge case handling
+        # member r is removed from group 1, but added to group 4
+        # and the group 1 remains to the room and group 4 is added to the room.
+        test_member_f = self.register_user("test_member_f", "password")
+        test_group_4_members = [test_member_f]
+
+        old_group_info = [test_group_1, test_group_2, test_group_3]
+        new_group_info = [test_group_1, test_group_4]
+
+        def get_members_by_group(group_id):
+            if group_id == test_group_1:
+                # This is used for initial room creation
+                return test_group_1_members
+            elif group_id == test_group_2:
+                return test_group_2_members
+            elif group_id == test_group_3:
+                return test_group_3_members
+            elif group_id == test_group_4:
+                return test_group_4_members
+            return []
+
+        mock_get_group_members.side_effect = get_members_by_group
+
+        # Configure mock to return different values based on group_id
+        def get_group_diff(group_id, sync, timeout):
+            if group_id == test_group_1:
+                return GroupDiffResponse(
+                    next_sync="something",
+                    data=[
+                        DiffRecord(user_id=test_member_a, action=Membership.ADD),
+                        DiffRecord(user_id=test_member_b, action=Membership.ADD),
+                        DiffRecord(user_id=test_member_r, action=Membership.REM),
+                    ],
+                )
+            if group_id == test_group_2:
+                return GroupDiffResponse(
+                    next_sync="something",
+                    data=[
+                        DiffRecord(user_id=test_member_c, action=Membership.ADD),
+                    ],
+                )
+            if group_id == test_group_3:
+                return GroupDiffResponse(
+                    next_sync="something",
+                    data=[
+                        DiffRecord(user_id=test_member_d, action=Membership.ADD),
+                        DiffRecord(user_id=test_member_e, action=Membership.ADD),
+                    ],
+                )
+
+        mock_get_group_diff.side_effect = get_group_diff
+        mock_batch_convert.side_effect = lambda x: x
+
+        # Create a managed room with the old group information
+        room_id = self._create_managed_room(
+            name="Test Room with Group Members", groups=old_group_info
+        )
+        self._test_get_membership(
+            room_id,
+            test_group_1_members + test_group_2_members + test_group_3_members,
+            expect_code=200,
+        )
+        room_account_data = self.get_success(
+            self.store.get_account_data_for_room(self.creator, room_id)
+        )
+        assert room_account_data == {
+            MANAGED_ROOM_TYPE: {"groups": old_group_info}
+        }, room_account_data
+
+        # Now update the group information
+        channel = self.make_request(
+            method="POST",
+            path=self.BASE_PATH + f"/{room_id}/groups",
+            content={"groups": new_group_info},
+            access_token=self.creator_access_token,
+            shorthand=False,
+        )
+        assert channel.code == HTTPStatus.OK, channel.result
+
+        member_should_be_in_room = test_group_1_add_members + test_group_4_members
+        member_should_not_be_in_room = (
+            test_group_1_rem_members + test_group_2_members + test_group_3_members
+        )
+
+        # Check if the new member of the group is joined to the room
+        for member in member_should_be_in_room:
+            path = f"/_matrix/client/v3/rooms/{room_id}/state/m.room.member/{member}"
+            channel = self.make_request(
+                "GET", path, access_token=self.creator_access_token
+            )
+            assert (
+                channel.code == HTTPStatus.OK
+            ), f"Expected 200 but got {channel.code} for member {member}"
+            assert (
+                channel.json_body["membership"] == "join"
+            ), f"Expected membership to be join but got {channel.json_body['membership']} for member {member}"
+
+        for member in member_should_not_be_in_room:
+            path = f"/_matrix/client/v3/rooms/{room_id}/state/m.room.member/{member}"
+            channel = self.make_request(
+                "GET", path, access_token=self.creator_access_token
+            )
+            assert (
+                channel.code == HTTPStatus.OK
+            ), f"Expected 200 but got {channel.code} for member {member}"
+            assert (
+                channel.json_body["membership"] == "leave"
+            ), f"Expected membership to be leave but got {channel.json_body['membership']} for member {member}"
+
+        # Check the account data is updated
+        room_account_data = self.get_success(
+            self.store.get_account_data_for_room(self.creator, room_id)
+        )
+        assert room_account_data == {
+            MANAGED_ROOM_TYPE: {"groups": new_group_info}
         }, room_account_data
 
 
@@ -363,7 +683,13 @@ class TestListManagedRooms(ModuleApiTestCase):
         "famedly_control_synapse.client.FamedlyControlClient.get_group_members",
         new_callable=AsyncMock,
     )
-    def test_list_returns_managed_rooms(self, mock_get_group_members) -> None:
+    @patch(
+        "famedly_control_synapse.room_handler.ManagedRoomHandler.batch_convert_external_user_ids_to_matrix_user_ids",
+        new_callable=AsyncMock,
+    )
+    def test_list_returns_managed_rooms(
+        self, mock_batch_convert, mock_get_group_members
+    ) -> None:
         """Created managed rooms should appear in the listing."""
         for i in range(2):
             self.register_user(f"user{i}", "password")
@@ -375,6 +701,7 @@ class TestListManagedRooms(ModuleApiTestCase):
             return []
 
         mock_get_group_members.side_effect = get_members_by_group
+        mock_batch_convert.side_effect = lambda x: x
 
         room_id = self._create_managed_room(
             name="Listed Room", groups=["group1", "group2"]
@@ -401,7 +728,11 @@ class TestListManagedRooms(ModuleApiTestCase):
         "famedly_control_synapse.client.FamedlyControlClient.get_group_members",
         new_callable=AsyncMock,
     )
-    def test_list_pagination(self, mock_get_group_members) -> None:
+    @patch(
+        "famedly_control_synapse.room_handler.ManagedRoomHandler.batch_convert_external_user_ids_to_matrix_user_ids",
+        new_callable=AsyncMock,
+    )
+    def test_list_pagination(self, mock_batch_convert, mock_get_group_members) -> None:
         """Pagination should work with from and limit params."""
         for i in range(3):
             self.register_user(f"user{i}", "password")
@@ -413,6 +744,7 @@ class TestListManagedRooms(ModuleApiTestCase):
             return []
 
         mock_get_group_members.side_effect = get_members_by_group
+        mock_batch_convert.side_effect = lambda x: x
 
         room_ids = []
         for i in range(3):
@@ -445,3 +777,6 @@ class TestListManagedRooms(ModuleApiTestCase):
         assert len(channel.json_body["chunk"]) == 1
         assert "next_batch" not in channel.json_body
         assert "prev_batch" in channel.json_body
+
+
+# TODO: clean up the test sets, remove the duplicated mocks and make it as class level

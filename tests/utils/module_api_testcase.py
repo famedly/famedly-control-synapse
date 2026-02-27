@@ -109,6 +109,7 @@ class ModuleApiTestCase(synapsetest.HomeserverTestCase):
                         "url": "http://dummy.test/famedlyControl",
                         "access_token": "dummy_token_for_testing",
                         "api_key": "dummy_api_key_for_testing",
+                        "auth_provider": "https://idp.example.com/",
                     },
                 }
             ]

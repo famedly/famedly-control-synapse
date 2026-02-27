@@ -48,7 +48,6 @@ dependencies = [
 
 [tool.hatch.envs.hatch-static-analysis]
 dependencies = [
-  "virtualenv==20.39.0",
   "black",
   "isort",
   "ruff",

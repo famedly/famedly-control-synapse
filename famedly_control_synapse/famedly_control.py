@@ -40,10 +40,10 @@ class FamedlyControl:
         self.clock = api._hs.get_clock()
         self.config = config
         self.client = FamedlyControlClient(self.api, config)
-        self.room_handler = ManagedRoomHandler(self.api)
-        # Register REST endpoints with the homeserver
-        self.resource = JsonResource(self.api._hs)
+        self.room_handler = ManagedRoomHandler(self.api, self.config)
 
+        # Register servlets
+        self.resource = JsonResource(self.api._hs)
         CreateManagedRoomResource(self.api, self.client, self.room_handler).register(
             self.resource
         )
@@ -51,8 +51,8 @@ class FamedlyControl:
         AssignGroupsToManagedRoomResource(
             self.api, self.client, self.room_handler
         ).register(self.resource)
-
         self.api.register_web_resource(MANAGED_ROOM_API_PREFIX, self.resource)
+
         logger.info("Module initialized")
 
     @staticmethod
