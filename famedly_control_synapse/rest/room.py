@@ -4,7 +4,6 @@ from typing import Iterable, Pattern
 
 from pydantic import ValidationError
 from synapse.api.constants import CREATOR_POWER_LEVEL
-from synapse.api.errors import SynapseError
 from synapse.api.room_versions import KNOWN_ROOM_VERSIONS
 from synapse.http.servlet import (
     RestServlet,
@@ -16,14 +15,14 @@ from synapse.http.site import SynapseRequest
 from synapse.module_api import ModuleApi
 from synapse.types import JsonDict, RoomID
 
-from famedly_control_synapse.client import FamedlyControlClient, Membership
+from famedly_control_synapse.client import FamedlyControlClient, FamedlyControlError
 from famedly_control_synapse.repository import ManagedRoomRepository
-from famedly_control_synapse.room_handler import ManagedRoomHandler
-from famedly_control_synapse.types import (
+from famedly_control_synapse.rest.types import (
     MANAGED_ROOM_TYPE,
     AssignGroupsToManagedRoomRequest,
     CreateManagedRoomRequest,
 )
+from famedly_control_synapse.room_handler import ManagedRoomHandler
 
 MANAGED_ROOM_API_PREFIX = "/_famedlyControl/v1/managedRooms"
 logger = logging.getLogger(__name__)
@@ -72,6 +71,10 @@ class CreateManagedRoomResource(RestServlet):
         room_config = parse_json_object_from_request(request)
 
         try:
+            if room_config.get("room_version") is None:
+                room_config["room_version"] = (
+                    self.api._hs.config.server.default_room_version.identifier
+                )
             validated_room_config = CreateManagedRoomRequest.model_validate(room_config)
         except ValidationError as e:
             validation_error = [
@@ -104,12 +107,26 @@ class CreateManagedRoomResource(RestServlet):
         )
 
         member_external_ids = set()
-        for group_id in validated_room_config.groups:
-            group_diff = await self.client.get_group_members(group_id)
-            member_external_ids.update(group_diff)
+        try:
+            for group_id in validated_room_config.groups:
+                members = await self.client.get_group_members(group_id)
+                member_external_ids.update(members)
+        except FamedlyControlError as e:
+            return e.code, {"error": e.msg}
+
+        user_mxids, not_founds = (
+            await self.room_handler.batch_convert_external_user_ids_to_matrix_user_ids(
+                list(member_external_ids)
+            )
+        )
+        if not_founds:
+            return 400, {
+                "error": "Some external user IDs could not be mapped to Matrix user IDs",
+                "details": not_founds,
+            }
 
         join_errors = await self.room_handler.force_join_users_to_room(
-            room_id, list(member_external_ids), requester
+            room_id, user_mxids, requester
         )
         if join_errors:
             logger.warning(
@@ -180,37 +197,33 @@ class AssignGroupsToManagedRoomResource(RestServlet):
         api: ModuleApi,
         client: FamedlyControlClient,
         room_handler: ManagedRoomHandler,
+        repository: ManagedRoomRepository,
     ) -> None:
         super().__init__()
         self.api = api
         self.client = client
         self.account_data_handler = self.api._account_data_handler
         self.room_handler = room_handler
+        self.repository = repository
 
     async def on_POST(
         self, request: SynapseRequest, room_id: str
     ) -> tuple[int, JsonDict]:
         """Handle POST requests to assign groups to a managed room."""
         # Validate room_id format to prevent malicious input
-        try:
-            RoomID.from_string(room_id)
-            # TODO: add case the room does not exists
-            # TODO: add case room that isn't a managed room
-        except SynapseError:
-            return 400, {"error": "Invalid room ID format. Expected a Matrix room ID."}
+        _ = RoomID.from_string(room_id)
 
+        # Validate user permissions
         requester = await self.api.get_user_by_req(request)
         user_id = requester.user.to_string()
         if not await self.api.is_user_admin(user_id):
             return 403, {"error": "user is not administrator"}
 
-        # Get the current groups information
-        old_groups_info = await self.api._store.get_account_data_for_room_and_type(
-            user_id, room_id, MANAGED_ROOM_TYPE
-        )
-        old_groups = old_groups_info.get("groups", []) if old_groups_info else []
+        # Validate if it's a managed room
+        if not await self.repository.is_managed_room(room_id, user_id):
+            return 404, {"error": "Room not found or not a managed room"}
 
-        # New groups information from the request body
+        # Updated groups information from the request body
         try:
             validated_input = AssignGroupsToManagedRoomRequest.model_validate(
                 parse_json_object_from_request(request)
@@ -221,53 +234,47 @@ class AssignGroupsToManagedRoomResource(RestServlet):
             ]
             return 400, {"error": "Invalid request body", "details": validation_error}
 
-        # TODO: This approach will change again after the API design is finalized.
-        # There will be a separate endpoint for just fetching current group members
-        # The diff endpoint will be used for periodic sync instead of this on-demand approach.
+        # Get the current members of the room
+        current_member_mxids = await self.api._store.get_users_in_room(room_id)
+        current_members = set(current_member_mxids)
 
-        # 1. Define the remaining groups, new groups, and removed groups
-        remaining_groups = set(old_groups) & set(validated_input.groups)
-        new_groups = set(validated_input.groups) - remaining_groups
-        removed_groups = set(old_groups) - remaining_groups
+        # Get the new groups member state (desired state after update)
+        try:
+            expected_member_external_ids = set()
+            for group_id in validated_input.groups:
+                members = await self.client.get_group_members(group_id)
+                expected_member_external_ids.update(members)
+        except FamedlyControlError as e:
+            return e.code, {"error": e.msg}
 
-        existing_members_external_ids = set()
-        members_to_add_external_ids: set[str] = set()
-        members_to_remove_external_ids: set[str] = set()
-
-        # 2. For the remaining groups, get the diff and skip all existing ADD members, remove all the REM members.
-        # TODO consider the case where there are newly added memebers
-        for group_id in remaining_groups:
-            # TODO: figure out the sync handling for each group.
-            members = await self.client.get_group_members(group_id)
-            existing_members_external_ids.update(members)
-            group_diff = await self.client.get_group_diff(
-                group_id, sync="something", timeout=30
+        expected_member_mxids, not_founds = (
+            await self.room_handler.batch_convert_external_user_ids_to_matrix_user_ids(
+                list(expected_member_external_ids)
             )
-            members_to_add_external_ids.update(
-                record.user_id
-                for record in group_diff.data
-                if record.action == Membership.ADD
-            )
-            members_to_remove_external_ids.update(
-                record.user_id
-                for record in group_diff.data
-                if record.action == Membership.REM
-            )
-        # 3. For the new groups, add all the ADD members, skip the removed
-        for group_id in new_groups:
-            members = await self.client.get_group_members(group_id)
-            members_to_add_external_ids.update(members)
-        members_to_add_external_ids -= existing_members_external_ids
+        )
+        if not_founds:
+            return 400, {
+                "error": "Some external user IDs could not be mapped to Matrix user IDs",
+                "details": not_founds,
+            }
 
-        # 4. For the removed groups, fetch all and kick them out.
-        for group_id in removed_groups:
-            members = await self.client.get_group_members(group_id)
-            members_to_remove_external_ids.update(members)
+        expected_members = set(expected_member_mxids)
 
-        # Kick out members who are no longer in the group
-        # TODO: prevent kicking out the room creator
+        # Calculate membership changes
+        members_to_add = expected_members - current_members
+        members_to_remove = current_members - expected_members
+
+        # Prevent the room creator/admin from the membership changes.
+        room_creator = await self.room_handler.get_room_creator(room_id)
+        if room_creator:
+            members_to_add.discard(room_creator)
+            members_to_remove.discard(room_creator)
+        members_to_add.discard(user_id)
+        members_to_remove.discard(user_id)
+
+        # Remove members who are no longer in any assigned group
         leave_errors = await self.room_handler.remove_users_from_room(
-            user_id, list(members_to_remove_external_ids), room_id
+            user_id, list(members_to_remove), room_id
         )
         if leave_errors:
             logger.warning(
@@ -278,9 +285,9 @@ class AssignGroupsToManagedRoomResource(RestServlet):
                 "details": leave_errors,
             }
 
-        # Add new members
+        # Add the new members who are not joined yet
         join_errors = await self.room_handler.force_join_users_to_room(
-            room_id, list(members_to_add_external_ids), requester
+            room_id, list(members_to_add), requester
         )
         if join_errors:
             logger.warning(
@@ -313,6 +320,3 @@ class AssignGroupsToManagedRoomResource(RestServlet):
             logger.exception(
                 "Failed to update account data for room %s: %s", room_id, e
             )
-
-
-# TODO: proper error and exception handling

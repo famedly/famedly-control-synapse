@@ -6,7 +6,7 @@ from synapse.server import HomeServer
 from synapse.util.clock import Clock
 from twisted.internet.testing import MemoryReactor
 
-from famedly_control_synapse.types import CreateManagedRoomRequest
+from famedly_control_synapse.rest.types import CreateManagedRoomRequest
 from tests.utils.module_api_testcase import ModuleApiTestCase
 
 
@@ -24,6 +24,7 @@ class TestPowerLevelHook(ModuleApiTestCase):
         config = CreateManagedRoomRequest(
             room_alias_name="pl_test_room",
             name=name,
+            room_version="12",
             groups=groups or ["test_group"],
         )
         with (
@@ -35,7 +36,7 @@ class TestPowerLevelHook(ModuleApiTestCase):
             patch(
                 "famedly_control_synapse.room_handler.ManagedRoomHandler.batch_convert_external_user_ids_to_matrix_user_ids",
                 new_callable=AsyncMock,
-                side_effect=lambda x: x,
+                side_effect=lambda x: (x, []),
             ),
         ):
             channel = self.make_request(

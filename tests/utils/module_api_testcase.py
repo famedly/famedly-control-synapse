@@ -33,7 +33,7 @@ from synapse.util.clock import Clock
 from twisted.internet.testing import MemoryReactor
 
 import tests.utils.homeserver_testcase as synapsetest
-from famedly_control_synapse.types import CreateManagedRoomRequest
+from famedly_control_synapse.rest.types import CreateManagedRoomRequest
 
 logger = logging.getLogger(__name__)
 # ruff: noqa: E501
@@ -106,7 +106,6 @@ class ModuleApiTestCase(synapsetest.HomeserverTestCase):
                             "api_url": "http://dummy.test/famedlyControl",
                             "access_token": "dummy_token_for_testing",
                         },
-                        "api_key": "dummy_api_key_for_testing",
                         "auth_provider": "https://idp.example.com/",
                     },
                 }
@@ -135,6 +134,7 @@ class ModuleApiTestCase(synapsetest.HomeserverTestCase):
         config = CreateManagedRoomRequest(
             room_alias_name=f"test_room_{self._room_counter}",
             name=name,
+            room_version="12",
             topic=f"Topic for {name}",
             groups=["test_group"],
         )

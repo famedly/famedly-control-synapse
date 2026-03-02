@@ -1,7 +1,8 @@
 import logging
 from typing import Final, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from synapse.api.errors import SynapseError
 from synapse.module_api import ModuleApi
 
 from famedly_control_synapse.config import FamedlyControlConfig
@@ -19,15 +20,8 @@ class Membership:
 class DiffRecord(BaseModel):
     """One record from a diff for a group."""
 
-    user_id: str  # External user ID
+    external_user_id: str = Field(alias="user_id")
     action: Literal["Add", "Rem"]  # Add: User was added, Rem: User was removed
-
-
-class GroupDiffResponse(BaseModel):
-    """Response containing group diff data."""
-
-    next_sync: str  # Current sync token to pass in next request
-    data: list[DiffRecord]  # List of changes for one group
 
 
 class ManyGroupsDiffResponse(BaseModel):
@@ -37,16 +31,26 @@ class ManyGroupsDiffResponse(BaseModel):
     data: dict[str, list[DiffRecord]]  # Mapping from Group IDs to list of changes
 
 
+class MemberInfo(BaseModel):
+    """External User Id."""
+
+    external_user_id: str = Field(alias="user_id")
+
+
+class GroupMembersResponse(BaseModel):
+    """Response containing list of group members."""
+
+    members: list[MemberInfo]
+
+
 class FamedlyControlClient:
     def __init__(self, api: ModuleApi, config: FamedlyControlConfig):
-        self.api_key = config.api_key
+        self.access_token = config.famedly_control.access_token
         self.url = config.famedly_control.api_url
         self.http_client = api.http_client
         self.sync = 0
 
     async def get_group_members(self, group_id: str) -> list[str]:
-        # WIP: There will be proper get_group_members endpoint provided by the external API.
-        # And the changes will be handled later pr.
         """Get the current members of a group.
 
         Args:
@@ -56,52 +60,39 @@ class FamedlyControlClient:
             List of external user IDs who are members of the group.
 
         Raises:
-            Exception: If the API returns an error or network failure occurs.
+            FamedlyControlError: If the API returns an error or network failure occurs.
         """
-        group_diff = await self.get_group_diff(group_id, sync="0", timeout=0)
-        return [
-            record.user_id
-            for record in group_diff.data
-            if record.action == Membership.ADD
-        ]
-
-    async def get_group_diff(
-        self, group_id: str, sync: str, timeout: int = 30
-    ) -> GroupDiffResponse:
-        """Get group membership diff for one particular group. Long polling.
-
-        Args:
-            group_id: The UUID of the group.
-            sync: Monotonically increasing sync token from previous response.
-            timeout: How long to wait in seconds if response would be empty.
-
-        Returns:
-            GroupDiffResponse containing next_sync token and list of diff records.
-
-        Raises:
-            Exception: If the API returns an error or network failure occurs.
-        """
-        uri = str(self.url) + "/get_group_diff"
+        uri = str(self.url) + "/get_group_members"
         body = {
             "group_id": group_id,
-            "sync": sync,
-            "timeout": timeout,
         }
-
         try:
             response = await self.http_client.post_json_get_json(
                 uri,
                 body,
-                headers={"Authorization": f"Bearer {self.api_key}"},
+                headers={"Authorization": f"Bearer {self.access_token}"},
             )
             if "Ok" in response:
-                return GroupDiffResponse.model_validate(response["Ok"])
+                validated_response = GroupMembersResponse.model_validate(response["Ok"])
+                return [
+                    member.external_user_id for member in validated_response.members
+                ]
+            elif "Err" in response:
+                error_type = response["Err"].get("type")
+                logger.error("Famedly Control API Error: %s", error_type)
+                raise FamedlyControlError(
+                    500, f"Famedly Control API Error: {error_type}"
+                )
             else:
-                raise Exception(f"Unexpected response: {response}")
-
-        except Exception as e:
-            logger.exception("Error fetching group diff: %s", e)
+                logger.error("Famedly Control API Error: %s", response)
+                raise FamedlyControlError(
+                    500, f"Unexpected response format: {response}"
+                )
+        except FamedlyControlError:
             raise
+        except Exception as e:
+            logger.error("Famedly Control API Error: %s", e)
+            raise FamedlyControlError(500, f"Famedly Control API Error: {e}") from e
 
     async def get_all_groups_diffs(
         self, sync: str, timeout: int = 30
@@ -118,25 +109,46 @@ class FamedlyControlClient:
             ManyGroupsDiffResponse containing next_sync token and mapping of group diffs.
 
         Raises:
-            Exception: If the API returns an error or network failure occurs.
+            FamedlyControlError: If the API returns an error or network failure occurs.
         """
         uri = str(self.url) + "/get_all_groups_diffs"
         body = {
             "sync": sync,
             "timeout": timeout,
         }
-
         try:
             response = await self.http_client.post_json_get_json(
                 uri,
                 body,
-                headers={"Authorization": f"Bearer {self.api_key}"},
+                headers={"Authorization": f"Bearer {self.access_token}"},
             )
             if "Ok" in response:
                 return ManyGroupsDiffResponse.model_validate(response["Ok"])
+            elif "Err" in response:
+                error_type = response["Err"].get("type")
+                logger.error("Famedly Control API Error: %s", error_type)
+                raise FamedlyControlError(
+                    500, f"Famedly Control API Error: {error_type}"
+                )
             else:
-                raise Exception(f"Unexpected response: {response}")
-
-        except Exception as e:
-            logger.exception("Error fetching all groups diffs: %s", e)
+                logger.error("Famedly Control API Error: %s", response)
+                raise FamedlyControlError(
+                    500, f"Unexpected response format: {response}"
+                )
+        except FamedlyControlError:
             raise
+        except Exception as e:
+            logger.error("Famedly Control API Error: %s", e)
+            raise FamedlyControlError(500, f"Famedly Control API Error: {e}") from e
+
+
+class FamedlyControlError(SynapseError):
+    """Base exception for FamedlyControl API errors."""
+
+    code = 500
+    msg = "An error occurred with the Famedly Control API"
+
+    def __init__(self, code: int | None = None, msg: str | None = None):
+        self.msg = msg or self.__class__.msg
+        self.code = code or self.__class__.code
+        super().__init__(self.code, self.msg)

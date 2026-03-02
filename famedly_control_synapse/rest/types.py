@@ -17,7 +17,9 @@ class CreationContent(BaseModel):
         description="Federation is disabled for managed rooms.",
     )
     predecessor: JsonDict | None = None
-    room_version: str | None = None  # TODO: use config
+    room_version: str | None = (
+        None  # The room version here is overridden. It is irrelevant which version comes here.
+    )
     type: str | None = None
 
     model_config = ConfigDict(validate_by_name=True, validate_by_alias=True)
@@ -71,7 +73,7 @@ class CreateManagedRoomRequest(BaseModel):
     power_level_content_override: PowerLevelEventContent = Field(
         default_factory=PowerLevelEventContent
     )
-    room_version: str = "12"
+    room_version: str | None = None
     groups: list[str]
     is_direct: Literal[False] = Field(
         default=False, description="is_direct cannot be enabled for managed rooms."

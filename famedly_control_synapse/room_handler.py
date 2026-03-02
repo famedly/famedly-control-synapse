@@ -1,11 +1,14 @@
 import logging
 
+from synapse.api.constants import EventTypes
 from synapse.module_api import ModuleApi
 from synapse.types import Requester, create_requester
 
 from famedly_control_synapse.config import FamedlyControlConfig
 
 logger = logging.getLogger(__name__)
+
+CREATE_EVENT_FILTER = (EventTypes.Create, "")
 
 
 class ManagedRoomHandler:
@@ -14,20 +17,18 @@ class ManagedRoomHandler:
         self.config = config
 
     async def force_join_users_to_room(
-        self, room_id: str, external_user_ids: list[str], requester: Requester
+        self, room_id: str, user_mxids: list[str], requester: Requester
     ) -> None | dict[str, str]:
         """Force join users to a managed room that is invite-only.
 
         Args:
             room_id: The ID of the room to join.
-            external_user_ids: The list of external user IDs to join.
+            user_mxids: The list of Matrix user IDs to join.
             requester: The requester who is the admin/room creator performing the action.
         """
-        matrix_user_ids = await self.batch_convert_external_user_ids_to_matrix_user_ids(
-            external_user_ids
-        )
+
         errors = {}
-        for member in matrix_user_ids:
+        for member in user_mxids:
             try:
                 fake_requester = create_requester(
                     member, authenticated_entity=requester.authenticated_entity
@@ -50,9 +51,14 @@ class ManagedRoomHandler:
                     remote_room_hosts=None,
                     ratelimit=False,
                 )
-
             except Exception as e:
-                errors[member] = str(e)
+                error_msg = str(e)
+                # Skip users who are already in the room
+                if "is already in the room" in error_msg:
+                    logger.info("Skipping %s: already in room %s", member, room_id)
+                    # TODO introduce metric to check how often this is happening
+                    continue
+                errors[member] = error_msg
                 logger.exception(
                     "Failed to update room membership for %s: %s", member, e
                 )
@@ -61,13 +67,10 @@ class ManagedRoomHandler:
         return None
 
     async def remove_users_from_room(
-        self, creator_id, external_user_ids, room_id
+        self, creator_id: str, user_mxids: list[str], room_id: str
     ) -> None | dict[str, str]:
-        matrix_user_ids = await self.batch_convert_external_user_ids_to_matrix_user_ids(
-            external_user_ids
-        )
         errors = {}
-        for member in matrix_user_ids:
+        for member in user_mxids:
             try:
                 await self.api.update_room_membership(
                     sender=creator_id,
@@ -87,40 +90,29 @@ class ManagedRoomHandler:
 
     async def batch_convert_external_user_ids_to_matrix_user_ids(
         self, external_user_ids: list[str]
-    ) -> list[str]:
+    ) -> tuple[list[str], list[str]]:
         """Convert multiple external user IDs to Matrix user IDs in a single database query.
 
         Args:
             external_user_ids: List of external user IDs to convert.
 
         Returns:
-            List of Matrix user IDs corresponding to the provided external user IDs.
+            Tuple of (found Matrix user IDs, not found external user IDs).
         """
         if not external_user_ids:
-            return []
+            return [], []
 
-        def _batch_get_users_txn(txn):
-            # TODO: Not sure how long the list would be, there might be limitations on amount of the paramters we can pass
-            ids = ",".join("?" * len(external_user_ids))
-            sql = f"""
-                SELECT external_id, user_id
-                FROM user_external_ids
-                WHERE auth_provider = ? AND external_id IN ({ids})
-            """
-            params = [self.config.auth_provider] + external_user_ids
-            txn.execute(sql, params)
-            return txn.fetchall()
-
-        rows = await self.api._store.db_pool.runInteraction(
-            "batch_get_user_by_external_id",
-            _batch_get_users_txn,
+        rows = await self.api._store.db_pool.simple_select_many_batch(
+            table="user_external_ids",
+            column="external_id",
+            iterable=external_user_ids,
+            keyvalues={"auth_provider": self.config.auth_provider},
+            retcols=["external_id", "user_id"],
+            desc="batch_get_user_by_external_id",
+            batch_size=100,
         )
-        if not rows:
-            raise Exception(
-                "No Matrix user IDs found for the provided external user IDs."
-            )
 
-        external_to_matrix = {row[0]: row[1] for row in rows}
+        external_to_matrix = {row[0]: row[1] for row in rows} if rows else {}
         result = []
         not_found_ids = []
         for external_id in external_user_ids:
@@ -134,5 +126,28 @@ class ManagedRoomHandler:
                 not_found_ids,
             )
 
-        # TODO: assert that UserID string to start with '@'
-        return result
+        return result, not_found_ids
+
+    async def get_room_creator(self, room_id: str) -> str | None:
+        """Get the room creator from the m.room.create event.
+
+        Args:
+            room_id: The room ID to get the creator for.
+
+        Returns:
+            The Matrix user ID of the room creator, or None if not found.
+        """
+        try:
+            state_map = await self.api.get_room_state(
+                room_id=room_id, event_filter=[CREATE_EVENT_FILTER]
+            )
+            create_event = state_map.get(CREATE_EVENT_FILTER)
+            if create_event:
+                # Room versions ≤10 have explicit creator field
+                creator_from_content = create_event.content.get("creator")
+                # Room versions 11+ use sender
+                sender = create_event.sender
+                return creator_from_content or sender
+        except Exception as e:
+            logger.warning("Failed to get room creator for %s: %s", room_id, e)
+        return None
