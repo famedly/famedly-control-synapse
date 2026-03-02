@@ -15,15 +15,18 @@
 import logging
 from typing import Any
 
+from synapse.http.server import JsonResource
 from synapse.module_api import ModuleApi
 
+from famedly_control_synapse.client import FamedlyControlClient
 from famedly_control_synapse.config import FamedlyControlConfig
 from famedly_control_synapse.rest.room import (
     MANAGED_ROOM_API_PREFIX,
+    AssignGroupsToManagedRoomResource,
     CreateManagedRoomResource,
     ListManagedRoomsResource,
-    ManagedRoomResource,
 )
+from famedly_control_synapse.room_handler import ManagedRoomHandler
 
 logger = logging.getLogger(__name__)
 
@@ -36,14 +39,19 @@ class FamedlyControl:
         self.server_name = api.server_name
         self.clock = api._hs.get_clock()
         self.config = config
-        root_resource = ManagedRoomResource(self.api, self.config)
-        root_resource.putChild(
-            b"createRoom", CreateManagedRoomResource(self.api, self.config)
+        self.client = FamedlyControlClient(self.api, config)
+        self.room_handler = ManagedRoomHandler(self.api, self.config)
+
+        # Register servlets
+        self.resource = JsonResource(self.api._hs)
+        CreateManagedRoomResource(self.api, self.client, self.room_handler).register(
+            self.resource
         )
-        root_resource.putChild(
-            b"rooms", ListManagedRoomsResource(self.api, self.config)
-        )
-        self.api.register_web_resource(MANAGED_ROOM_API_PREFIX, root_resource)
+        ListManagedRoomsResource(self.api).register(self.resource)
+        AssignGroupsToManagedRoomResource(
+            self.api, self.client, self.room_handler
+        ).register(self.resource)
+        self.api.register_web_resource(MANAGED_ROOM_API_PREFIX, self.resource)
 
         logger.info("Module initialized")
 

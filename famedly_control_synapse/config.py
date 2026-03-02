@@ -12,7 +12,7 @@
 #
 # You should have received a copy of the GNU Affero General Public License
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
-from pydantic import BaseModel, Field, HttpUrl, field_validator
+from pydantic import BaseModel, Field, HttpUrl, ValidationInfo, field_validator
 
 
 class FamedlyControlConfig(BaseModel):
@@ -26,12 +26,18 @@ class FamedlyControlConfig(BaseModel):
     access_token: str = Field(
         ..., min_length=1, description="Access token for authentication"
     )
+    api_key: str = Field(
+        ...,
+        min_length=1,
+        description="API key for authenticating with Famedly Control API",
+    )
+    auth_provider: str
 
-    @field_validator("access_token")
+    @field_validator("access_token", "api_key")
     @classmethod
-    def validate_access_token(cls, v: str) -> str:
+    def validate_token_fields(cls, v: str, info: ValidationInfo) -> str:
         if not v.strip():
-            raise ValueError("access_token cannot be empty or whitespace-only")
+            raise ValueError(f"{info.field_name} cannot be empty or whitespace-only")
         return v
 
 

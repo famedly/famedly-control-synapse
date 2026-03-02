@@ -24,11 +24,15 @@ class TestConfigParsing:
         config_dict = {
             "url": "https://api.example.com",
             "access_token": "test_token_123",
+            "api_key": "test_api_key_456",
+            "auth_provider": "https://idp.example.com/",
         }
         config = FamedlyControl.parse_config(config_dict)
 
         assert config.url == HttpUrl("https://api.example.com")
         assert config.access_token == "test_token_123"
+        assert config.api_key == "test_api_key_456"
+        assert config.auth_provider == "https://idp.example.com/"
 
     def test_missing_url(self):
         """Test that missing URL raises ValidationError."""
