@@ -128,9 +128,10 @@ class ListManagedRoomsResource(RestServlet):
 
     PATTERNS = famedly_control_patterns("/rooms")
 
-    def __init__(self, api: ModuleApi) -> None:
+    def __init__(self, api: ModuleApi, repository: ManagedRoomRepository) -> None:
         super().__init__()
         self.api = api
+        self.repo = repository
 
     async def on_GET(self, request: SynapseRequest) -> tuple[int, JsonDict]:
         """Handle GET requests to list managed rooms."""
@@ -150,9 +151,8 @@ class ListManagedRoomsResource(RestServlet):
             except ValueError:
                 return 400, {"error": "invalid 'from' parameter"}
 
-        repository = ManagedRoomRepository(self.api)
-        total_count = await repository.count_managed_rooms()
-        entries = await repository.get_managed_rooms_paginated(limit + 1, start_index)
+        total_count = await self.repo.count_managed_rooms()
+        entries = await self.repo.get_managed_rooms_paginated(limit + 1, start_index)
 
         has_next = len(entries) > limit
         chunk = entries[:limit]
