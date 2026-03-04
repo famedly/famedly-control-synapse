@@ -15,7 +15,7 @@
 import logging
 from typing import Any
 
-from synapse.api.constants import EventTypes
+from synapse.api.constants import EventTypes, Membership
 from synapse.api.errors import Codes, SynapseError
 from synapse.event_auth import get_user_power_level
 from synapse.events import EventBase
@@ -73,27 +73,70 @@ class FamedlyControl:
     async def check_event_allowed(
         self, event: EventBase, state_events: StateMap[EventBase]
     ) -> tuple[bool, dict | None]:
-        """Enforce power level restrictions for managed rooms.
-
-        * The admin must remain the highest power level in the room.
-        * No non-admin user may have a PL >= the admin's new PL.
-        * ``users_default`` must be strictly below the admin's new PL.
-        * Non-admin users must stay below sensitive event thresholds
-          (``state_default``, ``m.room.power_levels``).
-        * Membership actions (ban, kick, invite) must not exceed the
-        admin's PL and must be strictly above all non-admin users.
+        """Third-party rules callback that enforces membership and power level
+        restrictions for managed rooms.
         """
-        if event.type != EventTypes.PowerLevels:
-            return True, None
-
-        if not await self.repository.is_managed_room(event.room_id):
+        if event.type not in (EventTypes.Member, EventTypes.PowerLevels):
             return True, None
 
         create_event = state_events.get((EventTypes.Create, ""))
         if create_event is None:
+            raise SynapseError(
+                500,
+                "Managed room is missing m.room.create state",
+                Codes.UNKNOWN,
+            )
+
+        if not await self.repository.is_managed_room(
+            event.room_id, create_event.sender
+        ):
             return True, None
 
-        admin_user = create_event.sender
+        if event.type == EventTypes.Member:
+            return await self._check_membership_allowed(event, create_event.sender)
+        elif event.type == EventTypes.PowerLevels:
+            return await self._check_power_levels_allowed(
+                event, state_events, create_event.sender
+            )
+        else:
+            # cannot happen but makes the linter happy
+            return True, None
+
+    async def _check_membership_allowed(
+        self, event: EventBase, admin_user: str
+    ) -> tuple[bool, dict | None]:
+        """Block membership changes in managed rooms unless sent by the admin.
+
+        Joins are allowed because managed rooms are invite-only and only
+        the admin can send invites, so a join is implicitly admin-authorised.
+        """
+        if event.sender == admin_user:
+            return True, None
+
+        membership = event.content.get("membership")
+        if membership == Membership.JOIN:
+            return True, None
+
+        raise SynapseError(
+            403,
+            "Only the admin can edit membership in a managed room",
+            Codes.FORBIDDEN,
+        )
+
+    async def _check_power_levels_allowed(
+        self, event: EventBase, state_events: StateMap[EventBase], admin_user: str
+    ) -> tuple[bool, dict | None]:
+        """Block invalid power level changes in managed rooms.
+
+        Enforced constraints:
+        * The admin must remain the highest power level in the room.
+        * No non-admin user may have a PL >= the admin's PL.
+        * ``users_default`` must be strictly below the admin's PL.
+        * Non-admin users must stay below sensitive event thresholds
+          (``state_default``, ``m.room.power_levels``).
+        * Membership actions (ban, kick, invite) must not exceed the
+          admin's PL and must be strictly above all non-admin users.
+        """
         new_content = event.content
         users = new_content.get("users", {})
         users_default = new_content.get("users_default", 0)

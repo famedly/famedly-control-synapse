@@ -86,10 +86,16 @@ class ManagedRoomRepository:
 
         return [self._row_to_room_entry(row) for row in rows]
 
-    async def is_managed_room(self, room_id: str) -> bool:
+    # TODO: add caching for this since it's called for every membership event
+    async def is_managed_room(self, room_id: str, admin_user_id: str) -> bool:
         rows = await self._store.db_pool.execute(
             "is_managed_room",
-            "SELECT 1 FROM room_account_data WHERE room_id = ? AND account_data_type = ? LIMIT 1",
+            """SELECT 1 FROM room_account_data WHERE
+            user_id = ? AND
+            room_id = ? AND
+            account_data_type = ?
+            LIMIT 1""",
+            admin_user_id,
             room_id,
             MANAGED_ROOM_TYPE,
         )
