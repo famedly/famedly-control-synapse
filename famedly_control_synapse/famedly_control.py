@@ -217,10 +217,8 @@ class FamedlyControl:
             "kick": 50,
             "invite": 50,
         }
-        for action in ("ban", "kick", "invite"):
-            action_pl = new_content.get(action)
-            if action_pl is None:
-                action_pl = membership_action_defaults[action]
+        for action, action_default in membership_action_defaults.items():
+            action_pl = new_content.get(action, action_default)
 
             if action_pl > admin_pl:
                 raise SynapseError(
