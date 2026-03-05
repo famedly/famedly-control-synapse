@@ -39,17 +39,4 @@ class FamedlyControlApiConfig(BaseModel):
 
 class FamedlyControlConfig(BaseModel):
     famedly_control: FamedlyControlApiConfig
-    api_key: str = Field(
-        ...,
-        min_length=1,
-        description="API key for authenticating with Famedly Control API",
-    )
     auth_provider: str
-
-    @field_validator("api_key")
-    @classmethod
-    def validate_token_fields(cls, v: str, info: ValidationInfo) -> str:
-        return _validate_not_blank(v, info)
-
-
-# TODO: configure the logging options

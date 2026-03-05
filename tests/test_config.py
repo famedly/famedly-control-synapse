@@ -26,14 +26,12 @@ class TestConfigParsing:
                 "api_url": "https://api.example.com",
                 "access_token": "test_token_123",
             },
-            "api_key": "test_api_key_456",
             "auth_provider": "https://idp.example.com/",
         }
         config = FamedlyControl.parse_config(config_dict)
 
         assert config.famedly_control.api_url == HttpUrl("https://api.example.com")
         assert config.famedly_control.access_token == "test_token_123"
-        assert config.api_key == "test_api_key_456"
         assert config.auth_provider == "https://idp.example.com/"
 
     def test_missing_famedly_control(self):

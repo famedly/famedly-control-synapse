@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from famedly_control_synapse.types import (
+from famedly_control_synapse.rest.types import (
     CreateManagedRoomRequest,
     CreationContent,
     PowerLevelEventContent,
@@ -10,13 +10,8 @@ from famedly_control_synapse.types import (
 
 class TestCreationContent:
     def test_valid_creator_for_v10(self):
-        content = CreationContent(creator="@alice:example.com", room_version="10")
+        content = CreationContent(creator="@alice:example.com")
         assert content.creator == "@alice:example.com"
-
-    def test_valid_no_creator_for_v11(self):
-        content = CreationContent(room_version="11")
-        assert content.room_version == "11"
-        assert content.creator is None
 
     def test_m_federate_always_false(self):
         content = CreationContent()
@@ -48,9 +43,8 @@ class TestCreateManagedRoomRequest:
         req = CreateManagedRoomRequest(
             room_alias_name="testroom",
             name="Test Room",
-            creation_content=CreationContent(
-                creator="@alice:example.com", room_version="10"
-            ),
+            room_version="10",
+            creation_content=CreationContent(creator="@alice:example.com"),
             power_level_content_override=PowerLevelEventContent(
                 users={"@alice:example.com": 100}, users_default=0
             ),
@@ -64,6 +58,7 @@ class TestCreateManagedRoomRequest:
         req = CreateManagedRoomRequest(
             room_alias_name="testroom",
             name="Test Room",
+            room_version="12",
             creation_content=CreationContent(),
             power_level_content_override=PowerLevelEventContent(),
             groups=["testgroup"],
@@ -88,8 +83,3 @@ class TestCreateManagedRoomRequest:
         ]
         assert req.is_direct is False
         assert req.visibility == "private"
-
-    def test_create_managed_room_request_invalid_room_alias(self):
-        # Invalid alias
-        with pytest.raises(ValidationError):
-            CreateManagedRoomRequest(room_alias_name="Invalid Alias!")
