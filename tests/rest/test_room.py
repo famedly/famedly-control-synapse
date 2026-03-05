@@ -19,15 +19,14 @@ CREATE_KEY = (EventTypes.Create, "")
 POWER_KEY = (EventTypes.PowerLevels, "")
 
 
-@patch(
-    "famedly_control_synapse.client.FamedlyControlClient.get_group_members",
-    new_callable=AsyncMock,
-)
-@patch(
-    "famedly_control_synapse.room_handler.ManagedRoomHandler.batch_convert_external_user_ids_to_matrix_user_ids",
-    new_callable=AsyncMock,
-)
 class TestManagedRoomCreation(ModuleApiTestCase):
+    def prepare(
+        self, reactor: MemoryReactor, clock: Clock, homeserver: HomeServer
+    ) -> None:
+        super().prepare(reactor=reactor, clock=clock, homeserver=homeserver)
+        # This test series has one group with id 'test_group' and one member
+        self.fc_rest_helper.create_group("test_group", [self.invitee])
+
     def room_config_v12(self):
         config = CreateManagedRoomRequest(
             room_alias_name="test_room_alias",
@@ -58,20 +57,11 @@ class TestManagedRoomCreation(ModuleApiTestCase):
         }
         return config
 
-    def test_room_creation_success(
-        self, mock_batch_convert, mock_get_group_members
-    ) -> None:
+    def test_room_creation_success(self) -> None:
         """Tests that managed room creation returns the expected response"""
-        mock_get_group_members.return_value = [
-            self.invitee
-        ]  # in real case this should be external_ids
-        mock_batch_convert.side_effect = lambda x: (x, [])
-        channel = self.make_request(
-            method="POST",
-            path=self.CREATE_PATH,
+        channel = self.fc_rest_helper.create_managed_room(
             content=self.room_config_v12(),
             access_token=self.creator_access_token,
-            shorthand=False,
         )
 
         assert channel.code == HTTPStatus.OK, channel.result
@@ -100,16 +90,11 @@ class TestManagedRoomCreation(ModuleApiTestCase):
         )
         assert account_data == {MANAGED_ROOM_TYPE: {"groups": ["test_group"]}}
 
-    def test_room_creation_invalid_body(
-        self, mock_batch_convert, mock_get_group_members
-    ) -> None:
+    def test_room_creation_invalid_body(self) -> None:
         """Tests that invalid request body returns a 400 error with an error message"""
-        channel = self.make_request(
-            method="POST",
-            path=self.CREATE_PATH,
+        channel = self.fc_rest_helper.create_managed_room(
             content=self.invalid_room_config(),
             access_token=self.creator_access_token,
-            shorthand=False,
         )
 
         assert channel.code == HTTPStatus.BAD_REQUEST, channel.result
@@ -117,16 +102,11 @@ class TestManagedRoomCreation(ModuleApiTestCase):
             "Invalid request body" in channel.json_body["error"]
         ), "Response should contain an error message"
 
-    def test_room_creation_with_missing_required_fields(
-        self, mock_batch_convert, mock_get_group_members
-    ) -> None:
+    def test_room_creation_with_missing_required_fields(self) -> None:
         """Tests that missing required fields in the request body returns a 400 error with an error message"""
-        channel = self.make_request(
-            method="POST",
-            path=self.CREATE_PATH,
+        channel = self.fc_rest_helper.create_managed_room(
             content={"name": "Test Room"},
             access_token=self.creator_access_token,
-            shorthand=False,
         )
 
         assert channel.code == HTTPStatus.BAD_REQUEST, channel.result
@@ -134,21 +114,12 @@ class TestManagedRoomCreation(ModuleApiTestCase):
             "Invalid request body" in channel.json_body["error"]
         ), "Response should contain an error message"
 
-    def test_room_creation_powerlevel_with_room_v12(
-        self, mock_batch_convert, mock_get_group_members
-    ) -> None:
+    def test_room_creation_powerlevel_with_room_v12(self) -> None:
         """Tests that the creator has the highest power level and no other user can have the same"""
-        mock_get_group_members.return_value = [
-            self.invitee
-        ]  # in real case this should be external_ids
-        mock_batch_convert.side_effect = lambda x: (x, [])
         room_config = self.room_config_v12()
-        channel = self.make_request(
-            method="POST",
-            path=self.CREATE_PATH,
+        channel = self.fc_rest_helper.create_managed_room(
             content=room_config,
             access_token=self.creator_access_token,
-            shorthand=False,
         )
         assert channel.code == HTTPStatus.OK, channel.result
         room_id = channel.json_body["room_id"]
@@ -174,20 +145,11 @@ class TestManagedRoomCreation(ModuleApiTestCase):
         invitee_pl = event_auth.get_user_power_level(self.invitee, auth_events)
         assert invitee_pl == 0, "Invitee should have power level 0"
 
-    def test_room_creation_powerlevel_with_room_v10(
-        self, mock_batch_convert, mock_get_group_members
-    ) -> None:
-        mock_get_group_members.return_value = [
-            self.invitee
-        ]  # in real case this should be external_ids
-        mock_batch_convert.side_effect = lambda x: (x, [])
+    def test_room_creation_powerlevel_with_room_v10(self) -> None:
         room_config = self.room_config_v10()
-        channel = self.make_request(
-            method="POST",
-            path=self.CREATE_PATH,
+        channel = self.fc_rest_helper.create_managed_room(
             content=room_config,
             access_token=self.creator_access_token,
-            shorthand=False,
         )
         assert channel.code == HTTPStatus.OK, channel.result
         room_id = channel.json_body["room_id"]
@@ -213,18 +175,17 @@ class TestManagedRoomCreation(ModuleApiTestCase):
         invitee_pl = event_auth.get_user_power_level(self.invitee, auth_events)
         assert invitee_pl == 0, "Invitee should have power level 0"
 
-    def test_room_created_with_members_joined(
-        self, mock_batch_convert, mock_get_group_members
-    ) -> None:
+    def test_room_created_with_members_joined(self) -> None:
         """Tests that the users of the groups are joined to the room after creation"""
-        test_group = "test_group_1"
         test_member_1 = self.register_user("test_member_1", "password")
         test_member_2 = self.register_user("test_member_2", "password")
+        self.get_success(self.fc_rest_helper.register_external_id(test_member_1))
+        self.get_success(self.fc_rest_helper.register_external_id(test_member_2))
+
+        test_group = "test_group_1"
         group_members = [test_member_1, test_member_2]
-        mock_get_group_members.return_value = (
-            group_members  # in real case this should be external_ids
-        )
-        mock_batch_convert.side_effect = lambda x: (x, [])
+
+        self.fc_rest_helper.create_group(test_group, group_members)
 
         # Create a managed room with a group that has members
         room_id = self._create_managed_room(
