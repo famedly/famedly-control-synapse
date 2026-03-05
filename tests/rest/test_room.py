@@ -179,8 +179,6 @@ class TestManagedRoomCreation(ModuleApiTestCase):
         """Tests that the users of the groups are joined to the room after creation"""
         test_member_1 = self.register_user("test_member_1", "password")
         test_member_2 = self.register_user("test_member_2", "password")
-        self.get_success(self.fc_rest_helper.register_external_id(test_member_1))
-        self.get_success(self.fc_rest_helper.register_external_id(test_member_2))
 
         test_group = "test_group_1"
         group_members = [test_member_1, test_member_2]

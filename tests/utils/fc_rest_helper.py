@@ -22,7 +22,8 @@ class FamedlyRestHelper:
     Some prep work may be needed while setting up your test HomeServer:
     * After you have registered your user(before or after login) call
       `register_external_id()` to add that user to the required tables and prepare it
-      for having a group/group_id.
+      for having a group/group_id. If you use the supplied register_user() like normal,
+      this will be handled for you.
     * Before creating a managed room, prepare your group by calling create_group(). This
       will look up the needed information to handle the external user id's and set the
       group up so it can be "retrieved" from /get_group_members on the remote service.

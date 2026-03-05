@@ -103,7 +103,6 @@ class ModuleApiTestCase(synapsetest.HomeserverTestCase):
             access_token_id=self.creator_token_id,
         )
         self.invitee = self.register_user("invitee", "password")
-        self.get_success(self.fc_rest_helper.register_external_id(self.invitee))
 
     def default_config(self) -> dict[str, Any]:
         conf = super().default_config()
@@ -121,6 +120,21 @@ class ModuleApiTestCase(synapsetest.HomeserverTestCase):
                 }
             ]
         return conf
+
+    def register_user(
+        self,
+        username: str,
+        password: str,
+        admin: bool | None = False,
+        displayname: str | None = None,
+    ) -> str:
+        """
+        Supplement the existing register_user() function by also registering an external
+        user id for the user
+        """
+        mxid = super().register_user(username, password, admin, displayname)
+        self.get_success(self.fc_rest_helper.register_external_id(mxid))
+        return mxid
 
     def _test_get_membership(
         self, room: str, members: list[str], expect_code: int = 200
