@@ -30,10 +30,12 @@ from synapse.rest.client import (
 from synapse.server import HomeServer
 from synapse.types import UserID, create_requester
 from synapse.util.clock import Clock
-from twisted.internet.testing import MemoryReactor
+from twisted.internet.testing import MemoryReactor, MemoryReactorClock
 
 import tests.utils.homeserver_testcase as synapsetest
 from famedly_control_synapse.rest.types import CreateManagedRoomRequest
+from tests.utils.config import checked_cast
+from tests.utils.fc_rest_helper import FamedlyRestHelper
 
 logger = logging.getLogger(__name__)
 # ruff: noqa: E501
@@ -79,6 +81,13 @@ class ModuleApiTestCase(synapsetest.HomeserverTestCase):
         self.module_api = homeserver.get_module_api()
         self.event_creation_handler = homeserver.get_event_creation_handler()
         self.auth_handler = homeserver.get_auth_handler()
+
+        self.fc_rest_helper = FamedlyRestHelper(
+            homeserver,
+            checked_cast(MemoryReactorClock, self.hs.get_reactor()),
+            self.site,
+            self.hs.room_control.config,
+        )
         self.creator = self.register_user("room_creator", "password", admin=True)
         self.creator_access_token = self.login("room_creator", "password")
         self.creator_token_id = self.get_success(
@@ -94,6 +103,7 @@ class ModuleApiTestCase(synapsetest.HomeserverTestCase):
             access_token_id=self.creator_token_id,
         )
         self.invitee = self.register_user("invitee", "password")
+        self.get_success(self.fc_rest_helper.register_external_id(self.invitee))
 
     def default_config(self) -> dict[str, Any]:
         conf = super().default_config()
@@ -140,12 +150,9 @@ class ModuleApiTestCase(synapsetest.HomeserverTestCase):
         )
         if groups:
             config.groups = groups
-        channel = self.make_request(
-            method="POST",
-            path=self.CREATE_PATH,
+        channel = self.fc_rest_helper.create_managed_room(
             content=config.model_dump(),
             access_token=self.creator_access_token,
-            shorthand=False,
         )
         assert channel.code == HTTPStatus.OK, channel.result
         return channel.json_body["room_id"]
