@@ -28,11 +28,9 @@ Here are the available configuration options:
 modules:
   - module: "famedly_control_synapse.FamedlyControl"
     config:
-        title: "Famedly Control API by Famedly", # Title for the info endpoint, optional
-        description: "Custom description for the endpoint", # Description for the info endpoint, optional
-        contact: "random@example.com", # Contact information for the info endpoint, optional
-        url: str = "", # Prefix of the current famedly control http API
-        access_token: str = "", # Access token to authenticate against famedly control
+        famedly_control:
+          api_url: str = "", # Prefix of the current famedly control http API
+          access_token: str = "", # Access token to authenticate against famedly control
 ```
 
 ## Testing

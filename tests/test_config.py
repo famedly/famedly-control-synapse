@@ -22,22 +22,38 @@ class TestConfigParsing:
     def test_valid_config(self):
         """Test parsing a valid config with all required fields."""
         config_dict = {
-            "url": "https://api.example.com",
-            "access_token": "test_token_123",
+            "famedly_control": {
+                "api_url": "https://api.example.com",
+                "access_token": "test_token_123",
+            },
             "api_key": "test_api_key_456",
             "auth_provider": "https://idp.example.com/",
         }
         config = FamedlyControl.parse_config(config_dict)
 
-        assert config.url == HttpUrl("https://api.example.com")
-        assert config.access_token == "test_token_123"
+        assert config.famedly_control.api_url == HttpUrl("https://api.example.com")
+        assert config.famedly_control.access_token == "test_token_123"
         assert config.api_key == "test_api_key_456"
         assert config.auth_provider == "https://idp.example.com/"
 
-    def test_missing_url(self):
-        """Test that missing URL raises ValidationError."""
+    def test_missing_famedly_control(self):
+        """Test that missing famedly_control raises ValidationError."""
         config_dict = {
-            "access_token": "test_token",
+            "api_key": "test_api_key",
+            "auth_provider": "https://idp.example.com/",
+        }
+
+        with pytest.raises(ValidationError):
+            FamedlyControl.parse_config(config_dict)
+
+    def test_missing_api_url(self):
+        """Test that missing api_url raises ValidationError."""
+        config_dict = {
+            "famedly_control": {
+                "access_token": "test_token",
+            },
+            "api_key": "test_api_key",
+            "auth_provider": "https://idp.example.com/",
         }
 
         with pytest.raises(ValidationError):
@@ -46,7 +62,11 @@ class TestConfigParsing:
     def test_missing_access_token(self):
         """Test that missing access_token raises ValidationError."""
         config_dict = {
-            "url": "https://api.example.com",
+            "famedly_control": {
+                "api_url": "https://api.example.com",
+            },
+            "api_key": "test_api_key",
+            "auth_provider": "https://idp.example.com/",
         }
 
         with pytest.raises(ValidationError):
@@ -55,8 +75,12 @@ class TestConfigParsing:
     def test_invalid_url_scheme(self):
         """Test that non-HTTP/HTTPS URL raises ValidationError."""
         config_dict = {
-            "url": "ftp://example.com",
-            "access_token": "test_token",
+            "famedly_control": {
+                "api_url": "ftp://example.com",
+                "access_token": "test_token",
+            },
+            "api_key": "test_api_key",
+            "auth_provider": "https://idp.example.com/",
         }
 
         with pytest.raises(ValidationError):
@@ -65,8 +89,12 @@ class TestConfigParsing:
     def test_empty_access_token(self):
         """Test that empty access_token raises ValidationError."""
         config_dict = {
-            "url": "https://api.example.com",
-            "access_token": "",
+            "famedly_control": {
+                "api_url": "https://api.example.com",
+                "access_token": "",
+            },
+            "api_key": "test_api_key",
+            "auth_provider": "https://idp.example.com/",
         }
 
         with pytest.raises(ValidationError):
@@ -75,8 +103,12 @@ class TestConfigParsing:
     def test_whitespace_only_access_token(self):
         """Test that whitespace-only access_token raises ValidationError."""
         config_dict = {
-            "url": "https://api.example.com",
-            "access_token": "   ",
+            "famedly_control": {
+                "api_url": "https://api.example.com",
+                "access_token": "   ",
+            },
+            "api_key": "test_api_key",
+            "auth_provider": "https://idp.example.com/",
         }
 
         with pytest.raises(ValidationError):

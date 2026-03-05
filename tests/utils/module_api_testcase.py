@@ -40,7 +40,6 @@ logger = logging.getLogger(__name__)
 # We don't care about long lines in our testdata
 
 if TYPE_CHECKING:
-
     from synapse.storage.databases.main import DataStore
     from synapse.storage.databases.main.room import RoomWorkerStore
 
@@ -103,11 +102,10 @@ class ModuleApiTestCase(synapsetest.HomeserverTestCase):
                 {
                     "module": "famedly_control_synapse.FamedlyControl",
                     "config": {
-                        "title": "Famedly Control module",
-                        "description": "Famedly Control module by Famedly",
-                        "contact": "info@famedly.com",
-                        "url": "http://dummy.test/famedlyControl",
-                        "access_token": "dummy_token_for_testing",
+                        "famedly_control": {
+                            "api_url": "http://dummy.test/famedlyControl",
+                            "access_token": "dummy_token_for_testing",
+                        },
                         "api_key": "dummy_api_key_for_testing",
                         "auth_provider": "https://idp.example.com/",
                     },

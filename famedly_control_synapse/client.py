@@ -40,7 +40,7 @@ class ManyGroupsDiffResponse(BaseModel):
 class FamedlyControlClient:
     def __init__(self, api: ModuleApi, config: FamedlyControlConfig):
         self.api_key = config.api_key
-        self.url = config.url
+        self.url = config.famedly_control.api_url
         self.http_client = api.http_client
         self.sync = 0
 
