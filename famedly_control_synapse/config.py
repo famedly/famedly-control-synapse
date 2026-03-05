@@ -15,17 +15,30 @@
 from pydantic import BaseModel, Field, HttpUrl, ValidationInfo, field_validator
 
 
-class FamedlyControlConfig(BaseModel):
-    title: str = "Famedly Control module by Famedly"
-    description: str = "Famedly Control module by Famedly"
-    contact: str = "info@famedly.com"
-    # TODO: use configured url and access token
-    url: HttpUrl = Field(
+def _validate_not_blank(v: str, info: ValidationInfo) -> str:
+    if not v.strip():
+        raise ValueError(f"{info.field_name} cannot be empty or whitespace-only")
+    return v
+
+
+class FamedlyControlApiConfig(BaseModel):
+    api_url: HttpUrl = Field(
         ..., description="HTTP or HTTPS URL for the Famedly Control API"
     )
     access_token: str = Field(
-        ..., min_length=1, description="Access token for authentication"
+        ...,
+        min_length=1,
+        description="Access token to authenticate against Famedly Control",
     )
+
+    @field_validator("access_token")
+    @classmethod
+    def validate_token_fields(cls, v: str, info: ValidationInfo) -> str:
+        return _validate_not_blank(v, info)
+
+
+class FamedlyControlConfig(BaseModel):
+    famedly_control: FamedlyControlApiConfig
     api_key: str = Field(
         ...,
         min_length=1,
@@ -33,12 +46,10 @@ class FamedlyControlConfig(BaseModel):
     )
     auth_provider: str
 
-    @field_validator("access_token", "api_key")
+    @field_validator("api_key")
     @classmethod
     def validate_token_fields(cls, v: str, info: ValidationInfo) -> str:
-        if not v.strip():
-            raise ValueError(f"{info.field_name} cannot be empty or whitespace-only")
-        return v
+        return _validate_not_blank(v, info)
 
 
 # TODO: configure the logging options
