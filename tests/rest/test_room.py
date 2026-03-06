@@ -1,5 +1,4 @@
 from http import HTTPStatus
-from unittest.mock import AsyncMock, patch
 
 from synapse import event_auth
 from synapse.api.constants import (
@@ -212,39 +211,34 @@ class TestManagedRoomCreation(ModuleApiTestCase):
         }, room_account_data
 
 
-@patch(
-    "famedly_control_synapse.client.FamedlyControlClient.get_group_members",
-    new_callable=AsyncMock,
-)
-@patch(
-    "famedly_control_synapse.room_handler.ManagedRoomHandler.batch_convert_external_user_ids_to_matrix_user_ids",
-    new_callable=AsyncMock,
-)
 class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
 
-    def test_update_single_group_to_single_group(
-        self, mock_batch_convert, mock_get_group_members
+    def prepare(
+        self, reactor: MemoryReactor, clock: Clock, homeserver: HomeServer
     ) -> None:
+        super().prepare(reactor, clock, homeserver)
+        self.test_member_1 = self.register_user("test_member_1", "password")
+        self.test_member_2 = self.register_user("test_member_2", "password")
+        self.test_member_3 = self.register_user("test_member_3", "password")
+        self.test_member_a = self.register_user("test_member_a", "password")
+        self.test_member_b = self.register_user("test_member_b", "password")
+        self.test_member_c = self.register_user("test_member_c", "password")
+        self.test_member_d = self.register_user("test_member_d", "password")
+        self.test_member_e = self.register_user("test_member_e", "password")
+        self.test_member_f = self.register_user("test_member_f", "password")
+
+        self.test_member_r = self.register_user("test_member_r", "password")
+
+    def test_update_single_group_to_single_group(self) -> None:
         """Tests that managed room which already have groups can be updated and the
         account data is updated correctly."""
         test_old_group = "test_old_group"
-        test_member_1 = self.register_user("test_member_1", "password")
-        test_member_2 = self.register_user("test_member_2", "password")
-        old_group_members = [test_member_1, test_member_2]
+        old_group_members = [self.test_member_1, self.test_member_2]
+        self.fc_rest_helper.create_group(test_old_group, old_group_members)
 
         test_new_group = "test_new_group"
-        test_member_3 = self.register_user("test_member_3", "password")
-        new_group_members = [test_member_2, test_member_3]
-
-        def get_group_members(group_id):  # in real case this should return external_ids
-            if group_id == test_old_group:
-                return old_group_members
-            elif group_id == test_new_group:
-                return new_group_members
-            return []
-
-        mock_get_group_members.side_effect = get_group_members
-        mock_batch_convert.side_effect = lambda x: (x, [])
+        new_group_members = [self.test_member_2, self.test_member_3]
+        self.fc_rest_helper.create_group(test_new_group, new_group_members)
 
         # Create a managed room with the old group information
         room_id = self._create_managed_room(
@@ -259,12 +253,8 @@ class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
         }, room_account_data
 
         # Now update the group information
-        channel = self.make_request(
-            method="POST",
-            path=self.BASE_PATH + f"/{room_id}/groups",
-            content={"groups": [test_new_group]},
-            access_token=self.creator_access_token,
-            shorthand=False,
+        channel = self.fc_rest_helper.assign_groups_to_managed_room(
+            room_id, {"groups": [test_new_group]}, self.creator_access_token
         )
         assert channel.code == HTTPStatus.OK, channel.result
 
@@ -282,14 +272,14 @@ class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
             ), f"Expected membership to be join but got {channel.json_body['membership']} for member {member}"
 
         # Check if the old member who is not in the new group is removed from the room
-        path = f"/_matrix/client/v3/rooms/{room_id}/state/m.room.member/{test_member_1}"
+        path = f"/_matrix/client/v3/rooms/{room_id}/state/m.room.member/{self.test_member_1}"
         channel = self.make_request("GET", path, access_token=self.creator_access_token)
         assert (
             channel.code == HTTPStatus.OK
-        ), f"Expected 200 but got {channel.code} for member {test_member_1}"
+        ), f"Expected 200 but got {channel.code} for member {self.test_member_1}"
         assert (
             channel.json_body["membership"] == "leave"
-        ), f"Expected membership to be leave but got {channel.json_body['membership']} for member {test_member_1}"
+        ), f"Expected membership to be leave but got {channel.json_body['membership']} for member {self.test_member_1}"
 
         # Check the account data is updated
         room_account_data = self.get_success(
@@ -299,58 +289,34 @@ class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
             MANAGED_ROOM_TYPE: {"groups": [test_new_group]}
         }, room_account_data
 
-    def test_update_single_group_to_multiple_groups(
-        self, mock_batch_convert, mock_get_group_members
-    ) -> None:
+    def test_update_single_group_to_multiple_groups(self) -> None:
         """
         Test updating a single group to multiple groups in a managed room.
         Old groups info: test_group_1
         New groups info: test_group_1, test_group_2, test_group_3
         Edge case to consider with member r who was in group 1 but removed from group later.
         """
-        test_group_1 = "test_group_1"
-        test_member_a = self.register_user("test_member_a", "password")
-        test_member_b = self.register_user("test_member_b", "password")
-        test_member_r = self.register_user("test_member_r", "password")
-        test_group_1_current_members = [test_member_a, test_member_b]
-        test_group_1_creation_members = [test_member_a, test_member_b, test_member_r]
+        test_group_1 = "test_group_1a"
+        test_group_1_creation_members = [
+            self.test_member_a,
+            self.test_member_b,
+            self.test_member_r,
+        ]
+        self.fc_rest_helper.create_group(test_group_1, test_group_1_creation_members)
 
-        test_group_2 = "test_group_2"
-        test_member_c = self.register_user("test_member_c", "password")
-        test_group_2_members = [test_member_b, test_member_c]
+        test_group_2 = "test_group_2a"
+        test_group_2_members = [self.test_member_b, self.test_member_c]
+        self.fc_rest_helper.create_group(test_group_2, test_group_2_members)
 
-        test_group_3 = "test_group_3"
-        test_member_d = self.register_user("test_member_d", "password")
-        test_member_e = self.register_user("test_member_e", "password")
-        test_group_3_members = [test_member_d, test_member_e]
+        test_group_3 = "test_group_3a"
+        test_group_3_members = [self.test_member_d, self.test_member_e]
+        self.fc_rest_helper.create_group(test_group_3, test_group_3_members)
 
+        # The list/groups that will be in the room to begin
         old_group_info = [test_group_1]
+
+        # Then the room will be adjusted to have these groups instead
         new_group_info = [test_group_1, test_group_2, test_group_3]
-
-        call_counts = {}
-
-        def get_members_by_group(
-            group_id,
-        ):  # in real case this should return external_ids
-            if group_id not in call_counts:
-                call_counts[group_id] = 0
-            # Track how many times each group_id has been called
-            call_counts[group_id] += 1
-
-            if group_id == test_group_1:
-                # First call returns creation members, subsequent calls return current members
-                if call_counts[group_id] == 1:
-                    return test_group_1_creation_members
-                else:
-                    return test_group_1_current_members
-            elif group_id == test_group_2:
-                return test_group_2_members
-            elif group_id == test_group_3:
-                return test_group_3_members
-            return []
-
-        mock_get_group_members.side_effect = get_members_by_group
-        mock_batch_convert.side_effect = lambda x: (x, [])
 
         # Create a managed room with the old group information
         room_id = self._create_managed_room(
@@ -368,19 +334,16 @@ class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
         }, room_account_data
 
         # Now update the group information
-        channel = self.make_request(
-            method="POST",
-            path=self.BASE_PATH + f"/{room_id}/groups",
-            content={"groups": new_group_info},
-            access_token=self.creator_access_token,
-            shorthand=False,
+        self.fc_rest_helper.remove_user_from_group(self.test_member_r, test_group_1)
+        self.fc_rest_helper.assign_groups_to_managed_room(
+            room_id, {"groups": new_group_info}, self.creator_access_token
         )
-        assert channel.code == HTTPStatus.OK, channel.result
+        test_group_1_current_members = [self.test_member_a, self.test_member_b]
 
         member_should_be_in_room = set(
             test_group_1_current_members + test_group_2_members + test_group_3_members
         )
-        member_should_not_be_in_room = [test_member_r]
+        member_should_not_be_in_room = [self.test_member_r]
 
         # Check if the new member of the group is joined to the room
         for member in member_should_be_in_room:
@@ -415,69 +378,41 @@ class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
             MANAGED_ROOM_TYPE: {"groups": new_group_info}
         }, room_account_data
 
-    def test_update_multiple_groups_to_multiple_groups(
-        self, mock_batch_convert, mock_get_group_members
-    ) -> None:
+    def test_update_multiple_groups_to_multiple_groups(self) -> None:
         """
         Test updating multiple groups to multiple groups in a managed room.
         Old groups info: test_group_1, test_group_2, test_group_3
         New groups info: test_group_1, test_group_4
         The edge cases to consider with member_r and member_b who are in multiple groups.
         """
-        test_group_1 = "test_group_1"
-        test_member_a = self.register_user("test_member_a", "password")
-        test_member_b = self.register_user("test_member_b", "password")
-        test_member_r = self.register_user("test_member_r", "password")
-        test_group_1_current_members = [test_member_a, test_member_b]
-        test_group_1_creation_members = [test_member_a, test_member_b, test_member_r]
+        test_group_1 = "test_group_1b"
+        test_group_1_creation_members = [
+            self.test_member_a,
+            self.test_member_b,
+            self.test_member_r,
+        ]
+        self.fc_rest_helper.create_group(test_group_1, test_group_1_creation_members)
 
-        test_group_2 = "test_group_2"
+        test_group_2 = "test_group_2b"
         # Edge case example: member b is in both group 1 and 2. Group 1 is staying in
         # the room and group 2 is removed from the room.
         # member b should stay
-        test_member_c = self.register_user("test_member_c", "password")
-        test_group_2_members = [test_member_b, test_member_c]
+        test_group_2_members = [self.test_member_b, self.test_member_c]
+        self.fc_rest_helper.create_group(test_group_2, test_group_2_members)
 
-        test_group_3 = "test_group_3"
-        test_member_d = self.register_user("test_member_d", "password")
-        test_member_e = self.register_user("test_member_e", "password")
-        test_group_3_members = [test_member_d, test_member_e]
+        test_group_3 = "test_group_3b"
+        test_group_3_members = [self.test_member_d, self.test_member_e]
+        self.fc_rest_helper.create_group(test_group_3, test_group_3_members)
 
-        test_group_4 = "test_group_4"
+        test_group_4 = "test_group_4b"
         # Edge case example: member r is removed from group 1, but added by group 4
         # and the group 1 remains to the room and group 4 is added to the room.
         # member r should stay
-        test_member_f = self.register_user("test_member_f", "password")
-        test_group_4_members = [test_member_f, test_member_r]
+        test_group_4_members = [self.test_member_f]
+        self.fc_rest_helper.create_group(test_group_4, test_group_4_members)
 
         old_group_info = [test_group_1, test_group_2, test_group_3]
         new_group_info = [test_group_1, test_group_4]
-
-        call_counts = {}
-
-        def get_members_by_group(
-            group_id,
-        ):  # in real case this should return external_ids
-            if group_id not in call_counts:
-                call_counts[group_id] = 0
-            call_counts[group_id] += 1
-
-            if group_id == test_group_1:
-                # First call returns creation members, subsequent calls return current members
-                if call_counts[group_id] == 1:
-                    return test_group_1_creation_members
-                else:
-                    return test_group_1_current_members
-            elif group_id == test_group_2:
-                return test_group_2_members
-            elif group_id == test_group_3:
-                return test_group_3_members
-            elif group_id == test_group_4:
-                return test_group_4_members
-            return []
-
-        mock_get_group_members.side_effect = get_members_by_group
-        mock_batch_convert.side_effect = lambda x: (x, [])
 
         # Create a managed room with the old group information
         room_id = self._create_managed_room(
@@ -495,18 +430,22 @@ class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
             MANAGED_ROOM_TYPE: {"groups": old_group_info}
         }, room_account_data
 
-        # Now update the group information
-        channel = self.make_request(
-            method="POST",
-            path=self.BASE_PATH + f"/{room_id}/groups",
-            content={"groups": new_group_info},
-            access_token=self.creator_access_token,
-            shorthand=False,
+        # Now update the group information. Remember, test_member_r is being moved from
+        # group 1 to group 4
+        self.fc_rest_helper.remove_user_from_group(self.test_member_r, test_group_1)
+        self.fc_rest_helper.add_user_to_group(self.test_member_r, test_group_4)
+        # and assign the new groups to the room, which makes the adjustment
+        channel = self.fc_rest_helper.assign_groups_to_managed_room(
+            room_id, {"groups": new_group_info}, self.creator_access_token
         )
         assert channel.code == HTTPStatus.OK, channel.result
 
-        member_should_be_in_room = test_group_1_current_members + test_group_4_members
-        member_should_not_be_in_room = [test_member_c] + test_group_3_members
+        test_group_1_current_members = [self.test_member_a, self.test_member_b]
+
+        member_should_be_in_room = (
+            test_group_1_current_members + test_group_4_members + [self.test_member_r]
+        )
+        member_should_not_be_in_room = [self.test_member_c] + test_group_3_members
 
         # Check if the new member of the group is joined to the room
         for member in member_should_be_in_room:
@@ -541,28 +480,24 @@ class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
             MANAGED_ROOM_TYPE: {"groups": new_group_info}
         }, room_account_data
 
-    def test_prevent_room_creator_membership_change(
-        self, mock_batch_convert, mock_get_group_members
-    ) -> None:
-        """Tests that the creator's membership is not changed even if the creator is in the group and the group is removed from the room."""
+    def test_prevent_room_creator_membership_change(self) -> None:
+        """
+        Tests that the creator's membership is not changed even if the creator is in the
+        group and the group is removed from the room.
+        """
         group_including_creator = "test_group_including_creator"
-        member_1 = self.register_user("test_member_1", "password")
-        member_2 = self.register_user("test_member_2", "password")
-        group_including_creator_members = [self.creator, member_1, member_2]
+        group_including_creator_members = [
+            self.creator,
+            self.test_member_1,
+            self.test_member_2,
+        ]
+        self.fc_rest_helper.create_group(
+            group_including_creator, group_including_creator_members
+        )
 
         new_group = "new_group"
-        member_3 = self.register_user("test_member_3", "password")
-        new_group_members = [member_3]
-
-        def get_group_members(group_id):  # in real case this should return external_ids
-            if group_id == group_including_creator:
-                return group_including_creator_members
-            elif group_id == new_group:
-                return new_group_members
-            return []
-
-        mock_get_group_members.side_effect = get_group_members
-        mock_batch_convert.side_effect = lambda x: (x, [])
+        new_group_members = [self.test_member_3]
+        self.fc_rest_helper.create_group(new_group, new_group_members)
 
         # Create a managed room with a group that has the creator as a member
         room_id = self._create_managed_room(
@@ -570,12 +505,8 @@ class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
         )
 
         # Now update the group information to remove the group from the room
-        channel = self.make_request(
-            method="POST",
-            path=self.BASE_PATH + f"/{room_id}/groups",
-            content={"groups": [new_group]},
-            access_token=self.creator_access_token,
-            shorthand=False,
+        channel = self.fc_rest_helper.assign_groups_to_managed_room(
+            room_id, {"groups": [new_group]}, self.creator_access_token
         )
         assert channel.code == HTTPStatus.OK, channel.result
 
@@ -590,24 +521,17 @@ class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
         ), f"Expected membership to be join but got {channel.json_body['membership']} for member {self.creator}"
 
 
-@patch(
-    "famedly_control_synapse.client.FamedlyControlClient.get_group_members",
-    new_callable=AsyncMock,
-)
-@patch(
-    "famedly_control_synapse.room_handler.ManagedRoomHandler.batch_convert_external_user_ids_to_matrix_user_ids",
-    new_callable=AsyncMock,
-)
 class TestListManagedRooms(ModuleApiTestCase):
     def prepare(self, reactor: MemoryReactor, clock: Clock, homeserver: HomeServer):
         super().prepare(reactor, clock, homeserver)
         self.non_admin = self.register_user("non_admin", "password", admin=False)
         self.non_admin_token = self.login("non_admin", "password")
+        self.user_1 = self.register_user("user1", "password")
+        self.user_2 = self.register_user("user2", "password")
+        self.user_3 = self.register_user("user3", "password")
         self.account_data_handler = homeserver.get_account_data_handler()
 
-    def test_list_requires_admin(
-        self, mock_batch_convert, mock_get_group_members
-    ) -> None:
+    def test_list_requires_admin(self) -> None:
         """Non-admin users should get a 403."""
         channel = self.make_request(
             method="GET",
@@ -617,9 +541,7 @@ class TestListManagedRooms(ModuleApiTestCase):
         )
         assert channel.code == HTTPStatus.FORBIDDEN, channel.result
 
-    def test_list_requires_auth(
-        self, mock_batch_convert, mock_get_group_members
-    ) -> None:
+    def test_list_requires_auth(self) -> None:
         """Unauthenticated requests should get a 401."""
         channel = self.make_request(
             method="GET",
@@ -628,7 +550,7 @@ class TestListManagedRooms(ModuleApiTestCase):
         )
         assert channel.code == HTTPStatus.UNAUTHORIZED, channel.result
 
-    def test_list_empty(self, mock_batch_convert, mock_get_group_members) -> None:
+    def test_list_empty(self) -> None:
         """Listing when no managed rooms exist should return empty chunk."""
         channel = self.make_request(
             method="GET",
@@ -640,27 +562,12 @@ class TestListManagedRooms(ModuleApiTestCase):
         assert channel.json_body["chunk"] == []
         assert channel.json_body["total_room_count_estimate"] == 0
 
-    def test_list_returns_managed_rooms(
-        self, mock_batch_convert, mock_get_group_members
-    ) -> None:
+    def test_list_returns_managed_rooms(self) -> None:
         """Created managed rooms should appear in the listing."""
-        user_1 = self.register_user("user1", "password")
-        user_2 = self.register_user("user2", "password")
-
-        def get_members_by_group(
-            group_id,
-        ):  # in real case this should return external_ids
-            if group_id == "group1":
-                return [user_1]
-            if group_id == "group2":
-                return [user_2]
-            return []
-
-        mock_get_group_members.side_effect = get_members_by_group
-        mock_batch_convert.side_effect = lambda x: (x, [])
-
+        self.fc_rest_helper.create_group("group_1a", [self.user_1])
+        self.fc_rest_helper.create_group("group_2a", [self.user_2])
         room_id = self._create_managed_room(
-            name="Listed Room", groups=["group1", "group2"]
+            name="Listed Room", groups=["group_1a", "group_2a"]
         )
 
         channel = self.make_request(
@@ -676,34 +583,20 @@ class TestListManagedRooms(ModuleApiTestCase):
         room_chunk = channel.json_body["chunk"][0]
         assert room_chunk["room_id"] == room_id
         assert room_chunk["de.famedly.managedRoom"]["groups"] == [
-            "group1",
-            "group2",
+            "group_1a",
+            "group_2a",
         ]
 
-    def test_list_pagination(self, mock_batch_convert, mock_get_group_members) -> None:
+    def test_list_pagination(self) -> None:
         """Pagination should work with from and limit params."""
-        user_1 = self.register_user("user1", "password")
-        user_2 = self.register_user("user2", "password")
-        user_3 = self.register_user("user3", "password")
 
-        def get_members_by_group(
-            group_id,
-        ):  # in real case this should return external_ids
-            if group_id == "group1":
-                return [user_1]
-            if group_id == "group2":
-                return [user_2]
-            if group_id == "group3":
-                return [user_3]
-            return []
-
-        mock_get_group_members.side_effect = get_members_by_group
-        mock_batch_convert.side_effect = lambda x: (x, [])
-
+        self.fc_rest_helper.create_group("group_1b", [self.user_1])
+        self.fc_rest_helper.create_group("group_2b", [self.user_2])
+        self.fc_rest_helper.create_group("group_3b", [self.user_3])
         room_ids = []
         for i in range(3):
             room_ids.append(
-                self._create_managed_room(name=f"Room {i}", groups=[f"group{i}"])
+                self._create_managed_room(name=f"Room {i}", groups=[f"group_{i}b"])
             )
 
         # Get first page with limit 2
