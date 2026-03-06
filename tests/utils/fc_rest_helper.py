@@ -70,11 +70,41 @@ class FamedlyRestHelper:
         list_of_external_ids = []
         for mxid in list_of_mxid_ids:
             assert mxid in self.mxids_to_external_ids, (
-                "The requested mxid was not found to have an external user id. Did you "
+                f"The requested mxid('{mxid}') was not found to have an external user id. Did you "
                 "call register_external_id()?"
             )
             list_of_external_ids.append(self.mxids_to_external_ids[mxid])
         self.groups_to_ids[group_id] = list_of_external_ids
+
+    def remove_user_from_group(self, mxid: str, group_id: str) -> None:
+        """
+        Remove this mxid's associated external user id from the group
+        """
+        assert (
+            group_id in self.groups_to_ids
+        ), f"Group ('{group_id}') not found in group data. Did you create it with create_group()?"
+        assert (
+            mxid in self.mxids_to_external_ids
+        ), f"Mxid('{mxid}') not found to have an external user id while coordinating removal from a group('{group_id}')"
+        external_user_id = self.mxids_to_external_ids[mxid]
+        self.groups_to_ids[group_id].remove(external_user_id)
+
+    def add_user_to_group(self, mxid: str, group_id: str) -> None:
+        """
+        Add this mxid's associated external user id to a group
+        """
+        assert (
+            group_id in self.groups_to_ids
+        ), f"Group '{group_id}' not found in group data. Did you create it with create_group()?"
+        assert (
+            mxid in self.mxids_to_external_ids
+        ), f"Mxid('{mxid}') not found to have an external user id while coordinating addition to a group('{group_id}')"
+        external_user_id = self.mxids_to_external_ids[mxid]
+        existing_group_list = self.groups_to_ids[group_id]
+        assert (
+            external_user_id not in existing_group_list
+        ), f"Mxid('{mxid}') associated external user id was found in the requested group('{group_id}') already"
+        self.groups_to_ids[group_id].append(external_user_id)
 
     async def register_external_id(
         self,
@@ -207,6 +237,50 @@ class FamedlyRestHelper:
             channel = self.make_request(
                 method="POST",
                 path=self.CREATE_PATH,
+                content=content,
+                access_token=access_token,
+                shorthand=False,
+            )
+        return channel
+
+    def assign_groups_to_managed_room(
+        self, room_id: str, content: JsonDict, access_token: str
+    ) -> FakeChannel:
+        """
+        Adjust membership in a room based on groups using the endpoint provided by this
+        module. Just like for create_managed_room() above, an external user id must have
+        been assigned in the Synapse database, and a group_id must have been added
+        containing the users that are being assigned/adjusted/removed from the room
+        """
+        # From my understanding, groups is always a list even when empty
+        extracted_groups = content.get("groups", [])
+        response_list_of_group_member_responses = []
+
+        # Create an iterable to give to AsyncMock as a side_effect. Each time the
+        # patched function is called, the next iteration is returned
+        for group_id in extracted_groups:
+            list_of_member_info_objects = []
+            for external_id in self.groups_to_ids.get(group_id, []):
+                member_info = MemberInfo(user_id=external_id)
+                list_of_member_info_objects.append(member_info)
+            group_member_response = GroupMembersResponse(
+                members=list_of_member_info_objects
+            )
+            # Make sure to use the kwarg 'by_alias=True' or the created key is not
+            # right('external_user_id' and not 'user_id')
+            response_list_of_group_member_responses.append(
+                {"Ok": group_member_response.model_dump(by_alias=True)}
+            )
+
+        with patch.object(
+            SimpleHttpClient,
+            "post_json_get_json",
+            AsyncMock(side_effect=response_list_of_group_member_responses),
+        ):
+
+            channel = self.make_request(
+                method="POST",
+                path=self.BASE_PATH + f"/{room_id}/groups",
                 content=content,
                 access_token=access_token,
                 shorthand=False,

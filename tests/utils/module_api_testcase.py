@@ -152,7 +152,7 @@ class ModuleApiTestCase(synapsetest.HomeserverTestCase):
         self, name: str = "Test Room", groups: list[str] | None = None
     ) -> str:
         """Helper method to create a managed room with groups.
-        At the moment requires mock for the get_group_members
+        Requires that the members of the groups in the list are formed with create_group()
         Returns room ID of the created room."""
         self._room_counter += 1
         config = CreateManagedRoomRequest(
