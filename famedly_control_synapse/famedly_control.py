@@ -54,7 +54,7 @@ class FamedlyControl:
         CreateManagedRoomResource(self.api, self.client, self.room_handler).register(
             self.resource
         )
-        ListManagedRoomsResource(self.api).register(self.resource)
+        ListManagedRoomsResource(self.api, self.repository).register(self.resource)
         AssignGroupsToManagedRoomResource(
             self.api, self.client, self.room_handler, self.repository
         ).register(self.resource)

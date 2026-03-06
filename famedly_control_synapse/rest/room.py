@@ -9,7 +9,6 @@ from synapse.http.servlet import (
     RestServlet,
     parse_integer,
     parse_json_object_from_request,
-    parse_string,
 )
 from synapse.http.site import SynapseRequest
 from synapse.module_api import ModuleApi
@@ -145,9 +144,10 @@ class ListManagedRoomsResource(RestServlet):
 
     PATTERNS = famedly_control_patterns("/rooms")
 
-    def __init__(self, api: ModuleApi) -> None:
+    def __init__(self, api: ModuleApi, repository: ManagedRoomRepository) -> None:
         super().__init__()
         self.api = api
+        self.repo = repository
 
     async def on_GET(self, request: SynapseRequest) -> tuple[int, JsonDict]:
         """Handle GET requests to list managed rooms."""
@@ -157,19 +157,18 @@ class ListManagedRoomsResource(RestServlet):
         if not await self.api.is_user_admin(user_id):
             return 403, {"error": "user is not administrator"}
 
-        from_token = parse_string(request, "from")
+        # The 'from' query parameter is labeled as a string in the openapi spec, but is
+        # passed directly into the sql query which expects it to be an integer(for
+        # OFFSET). Just parse it as the integer directly. This allows it to have a
+        # default when one is not supplied, disallows negative numbers, and will raise
+        # as a 400 with M_INVALID_PARAM when it is not a legitimate integer. Since the
+        # 'from' parameter should have come from a previous page of this endpoint, this
+        # should be safe.
+        from_token = parse_integer(request, "from", default=0)
         limit = parse_integer(request, "limit", default=100)
 
-        start_index = 0
-        if from_token is not None:
-            try:
-                start_index = int(from_token)
-            except ValueError:
-                return 400, {"error": "invalid 'from' parameter"}
-
-        repository = ManagedRoomRepository(self.api)
-        total_count = await repository.count_managed_rooms()
-        entries = await repository.get_managed_rooms_paginated(limit + 1, start_index)
+        total_count = await self.repo.count_managed_rooms()
+        entries = await self.repo.get_managed_rooms_paginated(limit + 1, from_token)
 
         has_next = len(entries) > limit
         chunk = entries[:limit]
@@ -180,9 +179,9 @@ class ListManagedRoomsResource(RestServlet):
         }
 
         if has_next:
-            response["next_batch"] = str(start_index + limit)
-        if start_index > 0:
-            response["prev_batch"] = str(max(0, start_index - limit))
+            response["next_batch"] = str(from_token + limit)
+        if from_token > 0:
+            response["prev_batch"] = str(max(0, from_token - limit))
 
         return 200, response
 
