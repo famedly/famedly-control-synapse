@@ -40,7 +40,6 @@ class FamedlyRestHelper:
     """Mapping of mxids to external_ids, used to avoid lookups when creating groups"""
 
     BASE_PATH = "/_famedlyControl/v1/managedRooms"
-    LIST_PATH = BASE_PATH + "/rooms"
     CREATE_PATH = BASE_PATH + "/createRoom"
 
     def __init__(
