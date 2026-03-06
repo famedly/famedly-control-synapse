@@ -1,6 +1,7 @@
 import logging
 
 from synapse.api.constants import EventTypes
+from synapse.api.errors import Codes, UnstableSpecAuthError
 from synapse.module_api import ModuleApi
 from synapse.types import Requester, create_requester
 
@@ -51,13 +52,23 @@ class ManagedRoomHandler:
                     remote_room_hosts=None,
                     ratelimit=False,
                 )
-            except Exception as e:
-                error_msg = str(e)
-                # Skip users who are already in the room
-                if "is already in the room" in error_msg:
+            except UnstableSpecAuthError as e:
+                # UnstableSpecAuthError uses org.matrix.msc3848.unstable.errcode
+                # instead of the standard errcode field in the JSON response.
+                # When a user is already joined and we try to invite them again,
+                # this error is raised with errcode ALREADY_JOINED.
+                if e.errcode == Codes.ALREADY_JOINED:
                     logger.info("Skipping %s: already in room %s", member, room_id)
                     # TODO introduce metric to check how often this is happening
                     continue
+                # For other UnstableSpecAuthError codes, log and continue processing other users
+                errors[member] = e.msg
+                logger.exception(
+                    "Failed to update room membership for %s: %s", member, e
+                )
+            except Exception as e:
+                # Catch any other unexpected exceptions
+                error_msg = str(e)
                 errors[member] = error_msg
                 logger.exception(
                     "Failed to update room membership for %s: %s", member, e
