@@ -202,6 +202,26 @@ class FamedlyRestHelper:
             client_ip,
         )
 
+    def _get_member_group_side_effect(self, groups: list[str]) -> list[JsonDict]:
+        """
+        Create an iterable to give to AsyncMock as a side_effect. Each time the
+        patched function is called, the next iteration is returned. This works well with
+        groups extracted from a room creation or room assignment call
+        """
+        group_member_responses_list = []
+        for group_id in groups:
+            member_info_list = []
+            for external_id in self.groups_to_ids.get(group_id, []):
+                member_info = MemberInfo(user_id=external_id)
+                member_info_list.append(member_info)
+            group_member_response = GroupMembersResponse(members=member_info_list)
+            # Make sure to use the kwarg 'by_alias=True' or the created key is not
+            # right('external_user_id' and not 'user_id')
+            group_member_responses_list.append(
+                {"Ok": group_member_response.model_dump(by_alias=True)}
+            )
+        return group_member_responses_list
+
     def create_managed_room(self, content: JsonDict, access_token: str) -> FakeChannel:
         """
         Create a managed room using the local endpoint the module provides. Remember
@@ -210,29 +230,13 @@ class FamedlyRestHelper:
         containing the users
         """
         # From my understanding, groups is always a list even when empty
-        extracted_groups = content.get("groups", [])
-        response_list_of_group_member_responses = []
-
-        # Create an iterable to give to AsyncMock as a side_effect. Each time the
-        # patched function is called, the next iteration is returned
-        for group_id in extracted_groups:
-            list_of_member_info_objects = []
-            for external_id in self.groups_to_ids.get(group_id, []):
-                member_info = MemberInfo(user_id=external_id)
-                list_of_member_info_objects.append(member_info)
-            group_member_response = GroupMembersResponse(
-                members=list_of_member_info_objects
-            )
-            # Make sure to use the kwarg 'by_alias=True' or the created key is not
-            # right('external_user_id' and not 'user_id')
-            response_list_of_group_member_responses.append(
-                {"Ok": group_member_response.model_dump(by_alias=True)}
-            )
+        groups = content.get("groups", [])
+        group_member_responses_list = self._get_member_group_side_effect(groups)
 
         with patch.object(
             SimpleHttpClient,
             "post_json_get_json",
-            AsyncMock(side_effect=response_list_of_group_member_responses),
+            AsyncMock(side_effect=group_member_responses_list),
         ):
             channel = self.make_request(
                 method="POST",
@@ -253,29 +257,13 @@ class FamedlyRestHelper:
         containing the users that are being assigned/adjusted/removed from the room
         """
         # From my understanding, groups is always a list even when empty
-        extracted_groups = content.get("groups", [])
-        response_list_of_group_member_responses = []
-
-        # Create an iterable to give to AsyncMock as a side_effect. Each time the
-        # patched function is called, the next iteration is returned
-        for group_id in extracted_groups:
-            list_of_member_info_objects = []
-            for external_id in self.groups_to_ids.get(group_id, []):
-                member_info = MemberInfo(user_id=external_id)
-                list_of_member_info_objects.append(member_info)
-            group_member_response = GroupMembersResponse(
-                members=list_of_member_info_objects
-            )
-            # Make sure to use the kwarg 'by_alias=True' or the created key is not
-            # right('external_user_id' and not 'user_id')
-            response_list_of_group_member_responses.append(
-                {"Ok": group_member_response.model_dump(by_alias=True)}
-            )
+        groups = content.get("groups", [])
+        group_member_responses_list = self._get_member_group_side_effect(groups)
 
         with patch.object(
             SimpleHttpClient,
             "post_json_get_json",
-            AsyncMock(side_effect=response_list_of_group_member_responses),
+            AsyncMock(side_effect=group_member_responses_list),
         ):
 
             channel = self.make_request(
