@@ -66,26 +66,27 @@ class FamedlyControl:
         self.room_handler = ManagedRoomHandler(self.api, self.config)
         self.repository = ManagedRoomRepository(api)
 
-        self.syncer = GroupMembershipSyncer(
-            api, self.client, self.room_handler, self.repository, config
-        )
+        if self.api.should_run_background_tasks():
+            self.syncer = GroupMembershipSyncer(
+                api, self.client, self.room_handler, self.repository, config
+            )
 
-        # Register servlets
-        self.resource = _SyncTriggerJsonResource(self.api._hs, self.syncer)
-        CreateManagedRoomResource(
-            self.api, self.client, self.room_handler, self.repository
-        ).register(self.resource)
-        ListManagedRoomsResource(self.api, self.repository).register(self.resource)
-        AssignGroupsToManagedRoomResource(
-            self.api, self.client, self.room_handler, self.repository
-        ).register(self.resource)
-        self.api.register_web_resource(MANAGED_ROOM_API_PREFIX, self.resource)
+            # Register servlets
+            self.resource = _SyncTriggerJsonResource(self.api._hs, self.syncer)
+            CreateManagedRoomResource(
+                self.api, self.client, self.room_handler, self.repository
+            ).register(self.resource)
+            ListManagedRoomsResource(self.api, self.repository).register(self.resource)
+            AssignGroupsToManagedRoomResource(
+                self.api, self.client, self.room_handler, self.repository
+            ).register(self.resource)
+            self.api.register_web_resource(MANAGED_ROOM_API_PREFIX, self.resource)
+
+            self.api._clock.call_when_running(self.syncer.start)
 
         self.api.register_third_party_rules_callbacks(
             check_event_allowed=self.check_event_allowed,
         )
-
-        self.api._clock.call_when_running(self.syncer.start)
 
         logger.info("Module initialized")
 
