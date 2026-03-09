@@ -39,4 +39,12 @@ class FamedlyControlApiConfig(BaseModel):
 
 class FamedlyControlConfig(BaseModel):
     famedly_control: FamedlyControlApiConfig
-    auth_provider: str
+    auth_provider: str = Field(
+        ...,
+        description="The unique, internal ID of the external identity provider, used in the database to link external user IDs to Matrix user IDs",
+    )
+
+    @field_validator("auth_provider")
+    @classmethod
+    def validate_auth_provider(cls, v: str, info: ValidationInfo) -> str:
+        return _validate_not_blank(v, info)
