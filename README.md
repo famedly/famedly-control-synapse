@@ -31,6 +31,7 @@ modules:
         famedly_control:
           api_url: str = "", # Prefix of the current famedly control http API
           access_token: str = "", # Access token to authenticate against famedly control
+        auth_provider: str = "", # The unique, internal ID of the external identity provider.
 ```
 
 ## Testing

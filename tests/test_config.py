@@ -37,7 +37,6 @@ class TestConfigParsing:
     def test_missing_famedly_control(self):
         """Test that missing famedly_control raises ValidationError."""
         config_dict = {
-            "api_key": "test_api_key",
             "auth_provider": "https://idp.example.com/",
         }
 
@@ -50,7 +49,6 @@ class TestConfigParsing:
             "famedly_control": {
                 "access_token": "test_token",
             },
-            "api_key": "test_api_key",
             "auth_provider": "https://idp.example.com/",
         }
 
@@ -63,7 +61,6 @@ class TestConfigParsing:
             "famedly_control": {
                 "api_url": "https://api.example.com",
             },
-            "api_key": "test_api_key",
             "auth_provider": "https://idp.example.com/",
         }
 
@@ -77,7 +74,6 @@ class TestConfigParsing:
                 "api_url": "ftp://example.com",
                 "access_token": "test_token",
             },
-            "api_key": "test_api_key",
             "auth_provider": "https://idp.example.com/",
         }
 
@@ -91,7 +87,6 @@ class TestConfigParsing:
                 "api_url": "https://api.example.com",
                 "access_token": "",
             },
-            "api_key": "test_api_key",
             "auth_provider": "https://idp.example.com/",
         }
 
@@ -105,7 +100,6 @@ class TestConfigParsing:
                 "api_url": "https://api.example.com",
                 "access_token": "   ",
             },
-            "api_key": "test_api_key",
             "auth_provider": "https://idp.example.com/",
         }
 

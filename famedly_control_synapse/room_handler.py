@@ -129,7 +129,8 @@ class ManagedRoomHandler:
                 not_found_ids.append(external_id)
         if not_found_ids:
             logger.warning(
-                "The following external user IDs were not found in the database: %s",
+                "The following external user IDs from '%s' were not found: %s",
+                self.config.auth_provider,
                 not_found_ids,
             )
 
