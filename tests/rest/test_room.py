@@ -6,13 +6,16 @@ from synapse.api.constants import (
     CREATOR_POWER_LEVEL,
     EventTypes,
 )
+from synapse.api.errors import Codes, SynapseError
 from synapse.server import HomeServer
 from synapse.types.state import StateFilter
 from synapse.util.clock import Clock
 from twisted.internet.testing import MemoryReactor
 
+from famedly_control_synapse.client import FamedlyControlError
 from famedly_control_synapse.rest.room import MANAGED_ROOM_TYPE
 from famedly_control_synapse.rest.types import CreateManagedRoomRequest, CreationContent
+from famedly_control_synapse.room_handler import famedly_control_user_sync_error
 from tests.utils.module_api_testcase import ModuleApiTestCase
 
 CREATE_KEY = (EventTypes.Create, "")
@@ -629,6 +632,272 @@ class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
         assert (
             channel.json_body["membership"] == "join"
         ), f"Expected membership to be join but got {channel.json_body['membership']} for member {self.creator}"
+
+    def test_client_error_response(
+        self, mock_batch_convert, mock_get_group_members
+    ) -> None:
+        """Test that if client raises an error, the endpoint returns an error with an
+        error message."""
+        # Create a managed room
+        test_group = "test_group"
+        test_member = self.register_user("test_member", "password")
+        mock_get_group_members.return_value = [test_member]
+        mock_batch_convert.side_effect = lambda x: (x, [])
+        room_id = self._create_managed_room(name="Test Room", groups=[test_group])
+
+        # Try to update groups with the client raising an error
+        mock_get_group_members.side_effect = FamedlyControlError(
+            500, "Service unavailable"
+        )
+        channel = self.make_request(
+            method="POST",
+            path=self.BASE_PATH + f"/{room_id}/groups",
+            content={"groups": ["new_group"]},
+            access_token=self.creator_access_token,
+            shorthand=False,
+        )
+        assert channel.code == 500, channel.result
+        assert "Service unavailable" in channel.json_body["error"]
+
+    def test_conversion_error_response(
+        self, mock_batch_convert, mock_get_group_members
+    ) -> None:
+        """Test that if batch conversion raises an error, the endpoint returns an error
+        with an error message."""
+        # Create a managed room
+        test_group = "test_group"
+        test_member = self.register_user("test_member", "password")
+        mock_get_group_members.return_value = [test_member]
+        mock_batch_convert.side_effect = lambda x: (x, [])
+        room_id = self._create_managed_room(name="Test Room", groups=[test_group])
+
+        # Try to update groups and
+        # batch_convert_external_user_ids_to_matrix_user_ids will return not_founds
+        mock_batch_convert.side_effect = lambda x: (
+            [],
+            ["external_id_1", "external_id_2"],
+        )
+        channel = self.make_request(
+            method="POST",
+            path=self.BASE_PATH + f"/{room_id}/groups",
+            content={"groups": ["new_group"]},
+            access_token=self.creator_access_token,
+            shorthand=False,
+        )
+
+        assert channel.code == HTTPStatus.BAD_REQUEST, channel.result
+        assert (
+            "Some external user IDs could not be mapped to Matrix user IDs"
+            in channel.json_body["error"]
+        )
+        assert channel.json_body["details"] == ["external_id_1", "external_id_2"]
+
+    def test_leave_error_all_fail_response(
+        self,
+        mock_batch_convert,
+        mock_get_group_members,
+    ) -> None:
+        """Test that if leaving room raises errors for different users with different
+        error codes, the endpoint returns the details and metrics are incremented for
+        each error code.
+        """
+        # Get the metric initial values for both error codes
+        server_name = self.hs.hostname
+        initial_value_unknown = famedly_control_user_sync_error.labels(
+            error_code="M_UNKNOWN", server_name=server_name
+        )._value.get()
+        initial_value_unauthorized = famedly_control_user_sync_error.labels(
+            error_code="M_UNAUTHORIZED", server_name=server_name
+        )._value.get()
+
+        # Create a managed room with test_group_1
+        test_group_1 = "test_group_1"
+        test_member_1 = self.register_user("test_member_1", "password")
+        test_member_2 = self.register_user("test_member_2", "password")
+        mock_get_group_members.return_value = [test_member_1, test_member_2]
+        mock_batch_convert.side_effect = lambda x: (x, [])
+        room_id = self._create_managed_room(name="Test Room", groups=[test_group_1])
+
+        # Prepare test_group_2 which removes all 2 members and add a new member
+        test_group_2 = "test_group_2"
+        test_member_3 = self.register_user("test_member_3", "password")
+        mock_get_group_members.side_effect = lambda group_id: (
+            [test_member_1, test_member_2]
+            if group_id == test_group_1
+            else [test_member_3]
+        )
+
+        # Try to update groups with update_room_membership raising errors for different users
+        def update_room_membership_side_effect(
+            sender, target, room_id, new_membership, **kwargs
+        ):
+            if target == test_member_1:
+                raise SynapseError(500, "Unexpected error", Codes.UNKNOWN)
+            elif target == test_member_2:
+                raise SynapseError(401, "Permission denied", Codes.UNAUTHORIZED)
+            return None
+
+        with patch(
+            "synapse.module_api.ModuleApi.update_room_membership",
+            new_callable=AsyncMock,
+        ) as mock_update:
+            mock_update.side_effect = update_room_membership_side_effect
+
+            channel = self.make_request(
+                method="POST",
+                path=self.BASE_PATH + f"/{room_id}/groups",
+                content={"groups": [test_group_2]},
+                access_token=self.creator_access_token,
+                shorthand=False,
+            )
+            assert channel.code == 207, channel.result
+            assert (
+                "Failed to remove some members from the room"
+                in channel.json_body["error"]
+            )
+            assert test_member_1 in channel.json_body["details"]
+            assert test_member_2 in channel.json_body["details"]
+
+        # Since both members failed to be removed, they should still be in the room
+        # and the new member should be joined to the room
+        for member in [test_member_1, test_member_2, test_member_3]:
+            path = f"/_matrix/client/v3/rooms/{room_id}/state/m.room.member/{member}"
+            channel = self.make_request(
+                "GET", path, access_token=self.creator_access_token
+            )
+            assert (
+                channel.code == HTTPStatus.OK
+            ), f"Expected 200 but got {channel.code} for member {member}"
+            assert (
+                channel.json_body["membership"] == "join"
+            ), f"Expected membership to be join but got {channel.json_body['membership']} for member {member}"
+
+        # Check both metrics are incremented by 1 each
+        new_value_unknown = famedly_control_user_sync_error.labels(
+            error_code="M_UNKNOWN", server_name=server_name
+        )._value.get()
+        new_value_unauthorized = famedly_control_user_sync_error.labels(
+            error_code="M_UNAUTHORIZED", server_name=server_name
+        )._value.get()
+        assert new_value_unknown == initial_value_unknown + 1
+        assert new_value_unauthorized == initial_value_unauthorized + 1
+
+    def test_join_error_response(
+        self,
+        mock_batch_convert,
+        mock_get_group_members,
+    ) -> None:
+        """Test that if joining room raises an error, the endpoint returns an error with
+        an error message and error metric was sent."""
+        # Get the metric initial value
+        server_name = self.hs.hostname
+        initial_value = famedly_control_user_sync_error.labels(
+            error_code="M_NOT_FOUND", server_name=server_name
+        )._value.get()
+
+        # Create a managed room with test_group_1 which has 2 valid members.
+        test_group_1 = "test_group_1"
+        test_group_2 = "test_group_2"
+        test_member_1 = self.register_user("test_member_1", "password")
+        test_member_2 = self.register_user("test_member_2", "password")
+        non_existent_user = f"@random_user:{server_name}"
+        mock_get_group_members.side_effect = lambda group_id: (
+            [test_member_1, test_member_2]
+            if group_id == test_group_1
+            else [test_member_2, non_existent_user]
+        )
+        mock_batch_convert.side_effect = lambda x: (x, [])
+        room_id = self._create_managed_room(name="Test Room", groups=[test_group_1])
+
+        # Now update the group assignment to test_group_2, which has an already-joined
+        # member and one non-existent member. `force_join_users_to_room` will skip for
+        # the already-joined member and return error record for the non-existent member.
+        def update_room_membership_side_effect(
+            sender, target, room_id, new_membership, **kwargs
+        ):
+            if target == non_existent_user:
+                raise SynapseError(404, "User not found", Codes.NOT_FOUND)
+            return None
+
+        with patch(
+            "synapse.module_api.ModuleApi.update_room_membership",
+            new_callable=AsyncMock,
+        ) as mock_update:
+            mock_update.side_effect = update_room_membership_side_effect
+
+            channel = self.make_request(
+                method="POST",
+                path=self.BASE_PATH + f"/{room_id}/groups",
+                content={"groups": [test_group_2]},
+                access_token=self.creator_access_token,
+                shorthand=False,
+            )
+            assert channel.code == 207, channel.result
+            assert (
+                "Failed to add some members to the room" in channel.json_body["error"]
+            )
+            assert non_existent_user in channel.json_body["details"]
+            # test_member_2 should not be in details as the member was already in the room
+            assert test_member_2 not in channel.json_body["details"]
+
+        # Check the metric value is increased by 1
+        new_value = famedly_control_user_sync_error.labels(
+            error_code="M_NOT_FOUND", server_name=server_name
+        )._value.get()
+        assert new_value == initial_value + 1
+
+    def test_both_join_and_leave_error_response(
+        self,
+        mock_batch_convert,
+        mock_get_group_members,
+    ) -> None:
+        """Test that if both joining and leaving room raise errors, the endpoint returns
+        an error message with both leave_errors and join_errors."""
+        # Create a managed room with test_group_1
+        test_group_1 = "test_group_1"
+        test_group_2 = "test_group_2"
+        test_member_1 = self.register_user("test_member_1", "password")
+        test_member_2 = self.register_user("test_member_2", "password")
+        non_existent_user = f"@random_user:{self.hs.hostname}"
+        mock_get_group_members.side_effect = lambda group_id: (
+            [test_member_1, test_member_2]
+            if group_id == test_group_1
+            else [non_existent_user]
+        )
+        mock_batch_convert.side_effect = lambda x: (x, [])
+        room_id = self._create_managed_room(name="Test Room", groups=[test_group_1])
+
+        # Now update the group assignment to test_group_2, which only has non-existent member.
+        # Both `force_join_users_to_room` and `remove_users_from_room` will return errors.
+        with (
+            patch(
+                "famedly_control_synapse.room_handler.ManagedRoomHandler.force_join_users_to_room",
+                new_callable=AsyncMock,
+            ) as mock_force_join,
+            patch(
+                "famedly_control_synapse.room_handler.ManagedRoomHandler.remove_users_from_room",
+                new_callable=AsyncMock,
+            ) as mock_remove,
+        ):
+            mock_force_join.return_value = {non_existent_user: "User not found"}
+            mock_remove.return_value = {test_member_1: "Unexpected error"}
+
+            channel = self.make_request(
+                method="POST",
+                path=self.BASE_PATH + f"/{room_id}/groups",
+                content={"groups": [test_group_2]},
+                access_token=self.creator_access_token,
+                shorthand=False,
+            )
+            assert channel.code == 207, channel.result
+            assert (
+                "Failed to add and remove some members from the room"
+                in channel.json_body["error"]
+            )
+            assert "leave_errors" in channel.json_body["details"]
+            assert "join_errors" in channel.json_body["details"]
+            assert test_member_1 in channel.json_body["details"]["leave_errors"]
+            assert non_existent_user in channel.json_body["details"]["join_errors"]
 
 
 @patch(

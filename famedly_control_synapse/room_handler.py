@@ -1,6 +1,7 @@
 import logging
 from dataclasses import dataclass, field
 
+from prometheus_client import Counter
 from synapse.api.constants import EventTypes
 from synapse.api.errors import Codes, UnstableSpecAuthError
 from synapse.module_api import ModuleApi
@@ -11,6 +12,14 @@ from famedly_control_synapse.config import FamedlyControlConfig
 logger = logging.getLogger(__name__)
 
 CREATE_EVENT_FILTER = (EventTypes.Create, "")
+
+famedly_control_user_sync_error = Counter(
+    "famedly_control_user_sync_error",
+    "Counts failures when updating user membership in managed rooms. `error_code` is "
+    "the Synapse errcode derived from the exception, and `server_name` is the local "
+    "homeserver where the error occurred.",
+    labelnames=["error_code", "server_name"],
+)
 
 
 @dataclass
@@ -30,6 +39,24 @@ class ManagedRoomHandler:
     def __init__(self, api: ModuleApi, config: FamedlyControlConfig):
         self.api = api
         self.config = config
+        self.server_name = api.server_name
+
+    def increment_error_count(self, error_code: str) -> None:
+        """Helper function to increment the user sync error metric with server name."""
+        famedly_control_user_sync_error.labels(
+            error_code=error_code, server_name=self.server_name
+        ).inc()
+
+    def get_error_code_from_exception(self, e: Exception) -> str:
+        """Extract error code from an exception, handling different exception types.
+
+        For SynapseError (or other exceptions exposing an ``errcode`` attribute) return
+        the Matrix errcode value (e.g., `M_FORBIDDEN` for Codes.FORBIDDEN). For any
+        other cases, return `M_UNKNOWN`(Codes.UNKNOWN).
+        """
+        if hasattr(e, "errcode") and e.errcode and isinstance(e.errcode, Codes):
+            return str(e.errcode.value)
+        return "M_UNKNOWN"
 
     async def force_join_users_to_room(
         self, room_id: str, user_mxids: list[str], requester: Requester
@@ -41,12 +68,18 @@ class ManagedRoomHandler:
             user_mxids: The list of Matrix user IDs to join.
             requester: The requester who is the admin/room creator performing the action.
         """
-
         errors = {}
         for member in user_mxids:
             try:
+                existing_member = await self.api.check_user_exists(member)
+                if existing_member is None:
+                    errors[member] = "User does not exist on this server"
+                    logger.error("User %s does not exist, skipping", member)
+                    self.increment_error_count(error_code=Codes.NOT_FOUND.value)
+                    continue
+
                 fake_requester = create_requester(
-                    member, authenticated_entity=requester.authenticated_entity
+                    existing_member, authenticated_entity=requester.authenticated_entity
                 )
                 # First invite the user, managed room is invite-only.
                 await self.api._hs.get_room_member_handler().update_membership(
@@ -73,16 +106,21 @@ class ManagedRoomHandler:
                 # this error is raised with errcode ALREADY_JOINED.
                 if e.errcode == Codes.ALREADY_JOINED:
                     logger.info("Skipping %s: already in room %s", member, room_id)
-                    # TODO introduce metric to check how often this is happening
                     continue
                 # For other UnstableSpecAuthError codes, log and continue processing other users
                 errors[member] = e.msg
                 logger.error("Failed to update room membership for %s: %s", member, e)
+                self.increment_error_count(
+                    error_code=self.get_error_code_from_exception(e)
+                )
             except Exception as e:
                 # Catch any other unexpected exceptions
                 error_msg = str(e)
                 errors[member] = error_msg
                 logger.error("Failed to update room membership for %s: %s", member, e)
+                self.increment_error_count(
+                    error_code=self.get_error_code_from_exception(e)
+                )
         if errors:
             return errors
         return None
@@ -93,18 +131,28 @@ class ManagedRoomHandler:
         errors = {}
         for member in user_mxids:
             try:
+                existing_member = await self.api.check_user_exists(member)
+                if existing_member is None:
+                    errors[member] = "User does not exist on this server"
+                    logger.error("User %s does not exist, skipping removal", member)
+                    self.increment_error_count(error_code=Codes.NOT_FOUND.value)
+                    continue
+
                 await self.api.update_room_membership(
                     sender=creator_id,
-                    target=member,
+                    target=existing_member,
                     room_id=room_id,
                     new_membership="leave",
                     content={"reason": "User has been removed from the room"},
                 )
             except Exception as e:
-                logger.warning(
+                logger.error(
                     "Failed to remove user %s from room %s: %s", member, room_id, e
                 )
                 errors[member] = str(e)
+                self.increment_error_count(
+                    error_code=self.get_error_code_from_exception(e)
+                )
         if errors:
             return errors
         return None
