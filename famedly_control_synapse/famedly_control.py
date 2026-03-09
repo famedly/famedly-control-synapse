@@ -33,8 +33,25 @@ from famedly_control_synapse.rest.room import (
     ListManagedRoomsResource,
 )
 from famedly_control_synapse.room_handler import ManagedRoomHandler
+from famedly_control_synapse.sync import GroupMembershipSyncer
 
 logger = logging.getLogger(__name__)
+
+
+class _SyncTriggerJsonResource(JsonResource):
+    """JsonResource subclass that attempts to start the background sync
+    on every incoming request. If the data isn't ready yet, the next API call
+    will retry automatically.
+    """
+
+    def __init__(self, hs, syncer: GroupMembershipSyncer):
+        super().__init__(hs)
+        self._syncer = syncer
+
+    def render(self, request):
+        response_body = super().render(request)
+        self._syncer.start()
+        return response_body
 
 
 class FamedlyControl:
@@ -49,11 +66,15 @@ class FamedlyControl:
         self.room_handler = ManagedRoomHandler(self.api, self.config)
         self.repository = ManagedRoomRepository(api)
 
-        # Register servlets
-        self.resource = JsonResource(self.api._hs)
-        CreateManagedRoomResource(self.api, self.client, self.room_handler).register(
-            self.resource
+        self.syncer = GroupMembershipSyncer(
+            api, self.client, self.room_handler, self.repository, config
         )
+
+        # Register servlets
+        self.resource = _SyncTriggerJsonResource(self.api._hs, self.syncer)
+        CreateManagedRoomResource(
+            self.api, self.client, self.room_handler, self.repository
+        ).register(self.resource)
         ListManagedRoomsResource(self.api, self.repository).register(self.resource)
         AssignGroupsToManagedRoomResource(
             self.api, self.client, self.room_handler, self.repository
@@ -63,6 +84,8 @@ class FamedlyControl:
         self.api.register_third_party_rules_callbacks(
             check_event_allowed=self.check_event_allowed,
         )
+
+        self.api._clock.call_when_running(self.syncer.start)
 
         logger.info("Module initialized")
 

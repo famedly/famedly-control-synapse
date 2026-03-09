@@ -5,6 +5,7 @@ from synapse.api.constants import EventTypes, GuestAccess, Membership
 from synapse.types import JsonDict
 
 MANAGED_ROOM_TYPE = "de.famedly.managedRoom"
+SYNC_TOKEN_TYPE = "de.famedly.roomControl.lastSyncToken.v1"
 
 
 class CreationContent(BaseModel):

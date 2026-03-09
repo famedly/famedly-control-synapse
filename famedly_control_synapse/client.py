@@ -95,7 +95,7 @@ class FamedlyControlClient:
             raise FamedlyControlError(500, f"Famedly Control API Error: {e}") from e
 
     async def get_all_groups_diffs(
-        self, sync: str, timeout: int = 30
+        self, sync: str | None, timeout: int = 30
     ) -> ManyGroupsDiffResponse:
         """Get group membership diffs for all known groups. Long polling.
 
@@ -112,10 +112,11 @@ class FamedlyControlClient:
             FamedlyControlError: If the API returns an error or network failure occurs.
         """
         uri = str(self.url) + "/get_all_groups_diffs"
-        body = {
-            "sync": sync,
+        body: dict = {
             "timeout": timeout,
         }
+        if sync is not None:
+            body["sync"] = sync
         try:
             response = await self.http_client.post_json_get_json(
                 uri,
