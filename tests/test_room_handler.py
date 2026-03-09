@@ -1,9 +1,11 @@
+from http import HTTPStatus
 from unittest.mock import AsyncMock, patch
 
 from synapse.server import HomeServer
 from synapse.util.clock import Clock
 from twisted.internet.testing import MemoryReactor
 
+from famedly_control_synapse.rest.types import CreateManagedRoomRequest
 from tests.utils.module_api_testcase import ModuleApiTestCase
 
 
@@ -13,7 +15,112 @@ class TestRoomHandler(ModuleApiTestCase):
         super().prepare(reactor, clock, homeserver)
         self.room_handler = self.hs.room_control.room_handler
 
+    def _check_users_joined_to_room(
+        self,
+        room: str,
+        members: list[str],
+    ) -> None:
+        """Helper method to check if the users have joined a room."""
+        for member in members:
+            path = "/rooms/%s/state/m.room.member/%s" % (room, member)
+            channel = self.make_request(
+                "GET", path, access_token=self.creator_access_token
+            )
+            assert channel.code == HTTPStatus.OK, channel.result
+            assert channel.json_body["membership"] == "join", channel.result
+
+    def _create_simple_managed_room(self, name: str = "Membership Test Room") -> str:
+        config = CreateManagedRoomRequest(
+            room_alias_name="membership_test_room",
+            name=name,
+            groups=["test_group"],
+        )
+        with (
+            patch(
+                "famedly_control_synapse.client.FamedlyControlClient.get_group_members",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+            patch(
+                "famedly_control_synapse.room_handler.ManagedRoomHandler.batch_convert_external_user_ids_to_matrix_user_ids",
+                new_callable=AsyncMock,
+                side_effect=lambda x: (x, []),
+            ),
+        ):
+            channel = self.make_request(
+                method="POST",
+                path=self.CREATE_PATH,
+                content=config.model_dump(),
+                access_token=self.creator_access_token,
+                shorthand=False,
+            )
+        assert channel.code == HTTPStatus.OK, channel.result
+        return channel.json_body["room_id"]
+
+    def test_force_join_users_to_room(self) -> None:
+        """Test that users can be force joined to a room."""
+        user_a = self.register_user("test_user_a", "password")
+        user_b = self.register_user("test_user_b", "password")
+        user_c = self.register_user("test_user_c", "password")
+        room_id = self._create_simple_managed_room(name="Test Room")
+
+        error = self.get_success(
+            self.room_handler.force_join_users_to_room(
+                room_id=room_id,
+                user_mxids=[user_a, user_b, user_c],
+                requester=self.requester,
+            )
+        )
+        assert error is None, f"Expected no errors, but got: {error}"
+        self._check_users_joined_to_room(room_id, [user_a, user_b, user_c])
+
+    def test_force_join_users_already_in_room(self) -> None:
+        """Test that force joining users who are already in the room is handled correctly."""
+        user_a = self.register_user("test_user_a", "password")
+        user_b = self.register_user("test_user_b", "password")
+        room_id = self._create_simple_managed_room(name="Test Room")
+
+        # Force join the same user twice
+        error = self.get_success(
+            self.room_handler.force_join_users_to_room(
+                room_id=room_id, user_mxids=[user_a, user_b], requester=self.requester
+            )
+        )
+        assert error is None, f"Expected no errors, but got: {error}"
+        self._check_users_joined_to_room(room_id, [user_a, user_b])
+
+        error = self.get_success(
+            self.room_handler.force_join_users_to_room(
+                room_id=room_id, user_mxids=[user_a, user_b], requester=self.requester
+            )
+        )
+        assert error is None, f"Expected no errors, but got: {error}"
+        self._check_users_joined_to_room(room_id, [user_a, user_b])
+
+    def test_force_join_users_including_failed_users(self) -> None:
+        """Test that force joining users handles failures in a mixed scenario."""
+        user_a = self.register_user("test_user_a", "password")
+        user_b = self.register_user("test_user_b", "password")
+        room_id = self._create_simple_managed_room(name="Test Room")
+        # Ban user_b to make force join fail for this user
+        self.helper.ban(
+            room_id, self.creator, user_b, HTTPStatus.OK, self.creator_access_token
+        )
+
+        # Attempt to force join a mix of users where one will fail (banned user)
+        error = self.get_success(
+            self.room_handler.force_join_users_to_room(
+                room_id=room_id, user_mxids=[user_a, user_b], requester=self.requester
+            )
+        )
+        # Should return an error dict with user_b (the banned user)
+        assert error is not None, "Expected errors, but got None"
+        assert user_b in error, f"Expected error for {user_b}, but got: {error}"
+        # Check that the valid user (user_a) successfully joined the room
+        self._check_users_joined_to_room(room_id, [user_a])
+
     def test_batch_convert_external_user_ids_to_matrix_user_ids(self) -> None:
+        """Test that batch conversion of external user IDs to Matrix user IDs works correctly."""
         external_user_ids = []
         matrix_user_ids = []
 
