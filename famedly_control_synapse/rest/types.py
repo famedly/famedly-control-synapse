@@ -1,6 +1,7 @@
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic_core.core_schema import ValidationInfo
 from synapse.api.constants import EventTypes, GuestAccess, Membership
 from synapse.types import JsonDict
 
@@ -57,6 +58,7 @@ class CreateManagedRoomRequest(BaseModel):
     name: str
     topic: str | None = None
     creation_content: CreationContent = Field(default_factory=CreationContent)
+    # initial_state has a validator below
     initial_state: list[JsonDict] = Field(
         default_factory=lambda: [
             {
@@ -71,6 +73,7 @@ class CreateManagedRoomRequest(BaseModel):
             },
         ]
     )
+
     power_level_content_override: PowerLevelEventContent = Field(
         default_factory=PowerLevelEventContent
     )
@@ -85,6 +88,27 @@ class CreateManagedRoomRequest(BaseModel):
     )
 
     model_config = ConfigDict(extra="forbid")
+
+    @field_validator("initial_state")
+    @classmethod
+    def validate_initial_state(
+        cls, v: list[JsonDict], info: ValidationInfo
+    ) -> list[JsonDict]:
+        for state_dict in v:
+            if state_dict.get("type") == EventTypes.JoinRules:
+                if state_dict.get("content", {}).get("join_rule") != Membership.INVITE:
+                    raise ValueError(
+                        f"{info.field_name} contains join_rule that is not 'invite'"
+                    )
+            if state_dict.get("type") == EventTypes.GuestAccess:
+                if (
+                    state_dict.get("content", {}).get("guest_access")
+                    != GuestAccess.FORBIDDEN
+                ):
+                    raise ValueError(
+                        f"{info.field_name} contains guest_access that is not 'forbidden'"
+                    )
+        return v
 
 
 class AssignGroupsToManagedRoomRequest(BaseModel):
