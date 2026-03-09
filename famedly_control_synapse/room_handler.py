@@ -63,16 +63,12 @@ class ManagedRoomHandler:
                     continue
                 # For other UnstableSpecAuthError codes, log and continue processing other users
                 errors[member] = e.msg
-                logger.exception(
-                    "Failed to update room membership for %s: %s", member, e
-                )
+                logger.error("Failed to update room membership for %s: %s", member, e)
             except Exception as e:
                 # Catch any other unexpected exceptions
                 error_msg = str(e)
                 errors[member] = error_msg
-                logger.exception(
-                    "Failed to update room membership for %s: %s", member, e
-                )
+                logger.error("Failed to update room membership for %s: %s", member, e)
         if errors:
             return errors
         return None
