@@ -150,3 +150,58 @@ class ModuleApiTestCase(synapsetest.HomeserverTestCase):
         )
         assert channel.code == HTTPStatus.OK, channel.result
         return channel.json_body["room_id"]
+
+    def register_user(
+        self,
+        username: str,
+        password: str,
+        admin: bool | None = False,
+        displayname: str | None = None,
+    ) -> str:
+        """
+        Wrapper around the registration helper function to also insert database records
+        for an external ID provider
+        """
+        mxid_str = super().register_user(
+            username, password, admin=admin, displayname=displayname
+        )
+        self.register_external_id(mxid_str)
+        return mxid_str
+
+    def register_external_id(
+        self,
+        local_mxid: str,
+        requested_external_id: str | None = None,
+        auth_provider_override: str | None = None,
+    ) -> None:
+        """
+        Register an external user id into synapse.
+
+        The auth_provider is set in the FamedlyControl configuration under
+        'auth_provider'. For testing, it is generally configured to be
+        "https://idp.example.com/" but overriding is allowed.
+
+        When not provided, the requested_external_id is set to the provided local mxid
+        for simplicity.
+
+        Args:
+            local_mxid: The local user, registration is not required and the user does
+                not need to exist for operation
+            requested_external_id: Optionally override the requested external ID.
+            auth_provider_override: Optionally override the configured auth provider for
+                the database record.
+        """
+        if not requested_external_id:
+            requested_external_id = local_mxid
+
+        self.get_success(
+            self.hs.get_datastores().main.db_pool.simple_insert(
+                table="user_external_ids",
+                values={
+                    "user_id": local_mxid,
+                    "external_id": requested_external_id,
+                    "auth_provider": auth_provider_override
+                    or self.hs.room_control.config.auth_provider,
+                },
+            )
+        )
