@@ -16,6 +16,7 @@ from famedly_control_synapse.client import FamedlyControlError
 from famedly_control_synapse.rest.room import MANAGED_ROOM_TYPE
 from famedly_control_synapse.rest.types import CreateManagedRoomRequest, CreationContent
 from famedly_control_synapse.room_handler import famedly_control_user_sync_error
+from tests.utils.homeserver_testcase import override_config
 from tests.utils.module_api_testcase import ModuleApiTestCase
 
 CREATE_KEY = (EventTypes.Create, "")
@@ -254,6 +255,28 @@ class TestManagedRoomCreation(ModuleApiTestCase):
         assert room_account_data == {
             MANAGED_ROOM_TYPE: {"groups": [test_group]}
         }, room_account_data
+
+    @override_config({"run_background_tasks_on": "made_worker_name"})
+    def test_non_background_worker_managed_room_creation_endpoint_disabled(
+        self, mock_batch_convert, mock_get_group_members
+    ) -> None:
+        """
+        Tests that the managed room creation endpoint does not function on the incorrect
+        Synapse worker
+        """
+        mock_get_group_members.return_value = [
+            self.invitee
+        ]  # in real case this should be external_ids
+        mock_batch_convert.side_effect = lambda x: (x, [])
+        channel = self.make_request(
+            method="POST",
+            path=self.CREATE_PATH,
+            content=self.room_config_v12(),
+            access_token=self.creator_access_token,
+            shorthand=False,
+        )
+
+        assert channel.code == HTTPStatus.NOT_FOUND, channel.result
 
 
 @patch(
@@ -899,6 +922,23 @@ class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
             assert test_member_1 in channel.json_body["details"]["leave_errors"]
             assert non_existent_user in channel.json_body["details"]["join_errors"]
 
+    @override_config({"run_background_tasks_on": "fake_worker"})
+    def test_non_background_worker_assign_groups_endpoint_disabled(
+        self, mock_batch_convert, mock_get_group_members
+    ) -> None:
+        """
+        Tests that the assign groups endpoint does not function on the incorrect
+        Synapse worker
+        """
+        channel = self.make_request(
+            method="POST",
+            path=self.BASE_PATH + "/!fake_room_does_not_matter/groups",
+            content={"groups": ["test_new_group"]},
+            access_token=self.creator_access_token,
+            shorthand=False,
+        )
+        assert channel.code == HTTPStatus.NOT_FOUND, channel.result
+
 
 @patch(
     "famedly_control_synapse.client.FamedlyControlClient.get_group_members",
@@ -1041,3 +1081,19 @@ class TestListManagedRooms(ModuleApiTestCase):
         assert len(channel.json_body["chunk"]) == 1
         assert "next_batch" not in channel.json_body
         assert "prev_batch" in channel.json_body
+
+    @override_config({"run_background_tasks_on": "fake_worker"})
+    def test_non_background_worker_list_endpoint_disabled(
+        self, mock_batch_convert, mock_get_group_members
+    ) -> None:
+        """
+        Tests that the assign groups endpoint does not function on the incorrect
+        Synapse worker
+        """
+        channel = self.make_request(
+            method="GET",
+            path=self.LIST_PATH,
+            access_token=self.creator_access_token,
+            shorthand=False,
+        )
+        assert channel.code == HTTPStatus.NOT_FOUND, channel.result
