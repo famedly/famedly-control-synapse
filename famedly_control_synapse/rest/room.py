@@ -280,28 +280,39 @@ class AssignGroupsToManagedRoomResource(RestServlet):
             room_id, user_id, list(members_to_add), list(members_to_remove)
         )
         if result.leave_errors:
-            logger.warning(
+            logger.error(
                 "Some members failed to leave room %s: %s",
                 room_id,
                 result.leave_errors,
             )
-            return 207, {
-                "error": "Failed to remove some members from the room",
-                "details": result.leave_errors,
-            }
         if result.join_errors:
-            logger.warning(
+            logger.error(
                 "Some members failed to join room %s: %s",
                 room_id,
                 result.join_errors,
             )
+
+        # Update room account data with new groups information
+        await self.update_room_account_data(user_id, room_id, validated_input.groups)
+
+        if result.join_errors and result.leave_errors:
+            return 207, {
+                "error": "Failed to add and remove some members from the room",
+                "details": {
+                    "join_errors": result.join_errors,
+                    "leave_errors": result.leave_errors,
+                },
+            }
+        elif result.leave_errors:
+            return 207, {
+                "error": "Failed to remove some members from the room",
+                "details": result.leave_errors,
+            }
+        elif result.join_errors:
             return 207, {
                 "error": "Failed to add some members to the room",
                 "details": result.join_errors,
             }
-
-        # Update room account data with new groups information
-        await self.update_room_account_data(user_id, room_id, validated_input.groups)
         return 200, {"room_id": room_id, "groups": validated_input.groups}
 
     async def update_room_account_data(
