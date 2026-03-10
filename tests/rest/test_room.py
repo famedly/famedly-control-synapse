@@ -30,10 +30,6 @@ POWER_KEY = (EventTypes.PowerLevels, "")
     "famedly_control_synapse.client.FamedlyControlClient.get_group_members",
     new_callable=AsyncMock,
 )
-@patch(
-    "famedly_control_synapse.room_handler.ManagedRoomHandler.batch_convert_external_user_ids_to_matrix_user_ids",
-    new_callable=AsyncMock,
-)
 class TestManagedRoomCreation(ModuleApiTestCase):
     def room_config_v12(self):
         config = CreateManagedRoomRequest(
@@ -65,14 +61,11 @@ class TestManagedRoomCreation(ModuleApiTestCase):
         }
         return config
 
-    def test_room_creation_success(
-        self, mock_batch_convert, mock_get_group_members
-    ) -> None:
+    def test_room_creation_success(self, mock_get_group_members) -> None:
         """Tests that managed room creation returns the expected response"""
         mock_get_group_members.return_value = [
             self.invitee
         ]  # in real case this should be external_ids
-        mock_batch_convert.side_effect = lambda x: (x, [])
         channel = self.make_request(
             method="POST",
             path=self.CREATE_PATH,
@@ -107,9 +100,7 @@ class TestManagedRoomCreation(ModuleApiTestCase):
         )
         assert account_data == {MANAGED_ROOM_TYPE: {"groups": ["test_group"]}}
 
-    def test_room_creation_invalid_body(
-        self, mock_batch_convert, mock_get_group_members
-    ) -> None:
+    def test_room_creation_invalid_body(self, mock_get_group_members) -> None:
         """Tests that invalid request body returns a 400 error with an error message"""
         channel = self.make_request(
             method="POST",
@@ -125,7 +116,7 @@ class TestManagedRoomCreation(ModuleApiTestCase):
         ), "Response should contain an error message"
 
     def test_room_creation_with_missing_required_fields(
-        self, mock_batch_convert, mock_get_group_members
+        self, mock_get_group_members
     ) -> None:
         """Tests that missing required fields in the request body returns a 400 error with an error message"""
         channel = self.make_request(
@@ -142,13 +133,12 @@ class TestManagedRoomCreation(ModuleApiTestCase):
         ), "Response should contain an error message"
 
     def test_room_creation_powerlevel_with_room_v12(
-        self, mock_batch_convert, mock_get_group_members
+        self, mock_get_group_members
     ) -> None:
         """Tests that the creator has the highest power level and no other user can have the same"""
         mock_get_group_members.return_value = [
             self.invitee
         ]  # in real case this should be external_ids
-        mock_batch_convert.side_effect = lambda x: (x, [])
         room_config = self.room_config_v12()
         channel = self.make_request(
             method="POST",
@@ -182,12 +172,11 @@ class TestManagedRoomCreation(ModuleApiTestCase):
         assert invitee_pl == 0, "Invitee should have power level 0"
 
     def test_room_creation_powerlevel_with_room_v10(
-        self, mock_batch_convert, mock_get_group_members
+        self, mock_get_group_members
     ) -> None:
         mock_get_group_members.return_value = [
             self.invitee
         ]  # in real case this should be external_ids
-        mock_batch_convert.side_effect = lambda x: (x, [])
         room_config = self.room_config_v10()
         channel = self.make_request(
             method="POST",
@@ -221,13 +210,12 @@ class TestManagedRoomCreation(ModuleApiTestCase):
         assert invitee_pl == 0, "Invitee should have power level 0"
 
     def test_room_creation_user_powerlevel_room_v10(
-        self, mock_batch_convert, mock_get_group_members
+        self, mock_get_group_members
     ) -> None:
         """Test that a user powerlevel override works, room v10"""
         mock_get_group_members.return_value = [
             self.invitee
         ]  # in real case this should be external_ids
-        mock_batch_convert.side_effect = lambda x: (x, [])
         room_config = self.room_config_v10()
         power_level_content_override = room_config.setdefault(
             "power_level_content_override", {}
@@ -266,13 +254,12 @@ class TestManagedRoomCreation(ModuleApiTestCase):
         assert invitee_pl == 1, "Invitee should have power level 1"
 
     def test_room_creation_user_powerlevel_with_room_v12(
-        self, mock_batch_convert, mock_get_group_members
+        self, mock_get_group_members
     ) -> None:
         """Test that a user powerlevel override works, room v12"""
         mock_get_group_members.return_value = [
             self.invitee
         ]  # in real case this should be external_ids
-        mock_batch_convert.side_effect = lambda x: (x, [])
         room_config = self.room_config_v12()
         power_level_content_override = room_config.setdefault(
             "power_level_content_override", {}
@@ -310,9 +297,7 @@ class TestManagedRoomCreation(ModuleApiTestCase):
         invitee_pl = event_auth.get_user_power_level(self.invitee, auth_events)
         assert invitee_pl == 1, "Invitee should have power level 1"
 
-    def test_room_created_with_members_joined(
-        self, mock_batch_convert, mock_get_group_members
-    ) -> None:
+    def test_room_created_with_members_joined(self, mock_get_group_members) -> None:
         """Tests that the users of the groups are joined to the room after creation"""
         test_group = "test_group_1"
         test_member_1 = self.register_user("test_member_1", "password")
@@ -321,7 +306,6 @@ class TestManagedRoomCreation(ModuleApiTestCase):
         mock_get_group_members.return_value = (
             group_members  # in real case this should be external_ids
         )
-        mock_batch_convert.side_effect = lambda x: (x, [])
 
         # Create a managed room with a group that has members
         room_id = self._create_managed_room(
@@ -351,7 +335,7 @@ class TestManagedRoomCreation(ModuleApiTestCase):
 
     @override_config({"run_background_tasks_on": "made_worker_name"})
     def test_non_background_worker_managed_room_creation_endpoint_disabled(
-        self, mock_batch_convert, mock_get_group_members
+        self, mock_get_group_members
     ) -> None:
         """
         Tests that the managed room creation endpoint does not function on the incorrect
@@ -360,7 +344,6 @@ class TestManagedRoomCreation(ModuleApiTestCase):
         mock_get_group_members.return_value = [
             self.invitee
         ]  # in real case this should be external_ids
-        mock_batch_convert.side_effect = lambda x: (x, [])
         channel = self.make_request(
             method="POST",
             path=self.CREATE_PATH,
@@ -397,7 +380,7 @@ class TestManagedRoomCreation(ModuleApiTestCase):
         return config
 
     def test_room_creation_fails_with_invalid_initial_state(
-        self, mock_batch_convert, mock_get_group_members
+        self, mock_get_group_members
     ) -> None:
         """
         Test edge cases involving `initial_state` included in the room creation request.
@@ -458,15 +441,9 @@ class TestManagedRoomCreation(ModuleApiTestCase):
     "famedly_control_synapse.client.FamedlyControlClient.get_group_members",
     new_callable=AsyncMock,
 )
-@patch(
-    "famedly_control_synapse.room_handler.ManagedRoomHandler.batch_convert_external_user_ids_to_matrix_user_ids",
-    new_callable=AsyncMock,
-)
 class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
 
-    def test_update_single_group_to_single_group(
-        self, mock_batch_convert, mock_get_group_members
-    ) -> None:
+    def test_update_single_group_to_single_group(self, mock_get_group_members) -> None:
         """Tests that managed room which already have groups can be updated and the
         account data is updated correctly."""
         test_old_group = "test_old_group"
@@ -486,7 +463,6 @@ class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
             return []
 
         mock_get_group_members.side_effect = get_group_members
-        mock_batch_convert.side_effect = lambda x: (x, [])
 
         # Create a managed room with the old group information
         room_id = self._create_managed_room(
@@ -542,7 +518,7 @@ class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
         }, room_account_data
 
     def test_update_single_group_to_multiple_groups(
-        self, mock_batch_convert, mock_get_group_members
+        self, mock_get_group_members
     ) -> None:
         """
         Test updating a single group to multiple groups in a managed room.
@@ -592,7 +568,6 @@ class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
             return []
 
         mock_get_group_members.side_effect = get_members_by_group
-        mock_batch_convert.side_effect = lambda x: (x, [])
 
         # Create a managed room with the old group information
         room_id = self._create_managed_room(
@@ -658,7 +633,7 @@ class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
         }, room_account_data
 
     def test_update_multiple_groups_to_multiple_groups(
-        self, mock_batch_convert, mock_get_group_members
+        self, mock_get_group_members
     ) -> None:
         """
         Test updating multiple groups to multiple groups in a managed room.
@@ -719,7 +694,6 @@ class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
             return []
 
         mock_get_group_members.side_effect = get_members_by_group
-        mock_batch_convert.side_effect = lambda x: (x, [])
 
         # Create a managed room with the old group information
         room_id = self._create_managed_room(
@@ -784,7 +758,7 @@ class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
         }, room_account_data
 
     def test_prevent_room_creator_membership_change(
-        self, mock_batch_convert, mock_get_group_members
+        self, mock_get_group_members
     ) -> None:
         """Tests that the creator's membership is not changed even if the creator is in the group and the group is removed from the room."""
         group_including_creator = "test_group_including_creator"
@@ -804,7 +778,6 @@ class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
             return []
 
         mock_get_group_members.side_effect = get_group_members
-        mock_batch_convert.side_effect = lambda x: (x, [])
 
         # Create a managed room with a group that has the creator as a member
         room_id = self._create_managed_room(
@@ -831,16 +804,13 @@ class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
             channel.json_body["membership"] == "join"
         ), f"Expected membership to be join but got {channel.json_body['membership']} for member {self.creator}"
 
-    def test_client_error_response(
-        self, mock_batch_convert, mock_get_group_members
-    ) -> None:
+    def test_client_error_response(self, mock_get_group_members) -> None:
         """Test that if client raises an error, the endpoint returns an error with an
         error message."""
         # Create a managed room
         test_group = "test_group"
         test_member = self.register_user("test_member", "password")
         mock_get_group_members.return_value = [test_member]
-        mock_batch_convert.side_effect = lambda x: (x, [])
         room_id = self._create_managed_room(name="Test Room", groups=[test_group])
 
         # Try to update groups with the client raising an error
@@ -857,24 +827,20 @@ class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
         assert channel.code == 500, channel.result
         assert "Service unavailable" in channel.json_body["error"]
 
-    def test_conversion_error_response(
-        self, mock_batch_convert, mock_get_group_members
-    ) -> None:
+    def test_conversion_error_response(self, mock_get_group_members) -> None:
         """Test that if batch conversion raises an error, the endpoint returns an error
         with an error message."""
         # Create a managed room
         test_group = "test_group"
         test_member = self.register_user("test_member", "password")
         mock_get_group_members.return_value = [test_member]
-        mock_batch_convert.side_effect = lambda x: (x, [])
         room_id = self._create_managed_room(name="Test Room", groups=[test_group])
 
         # Try to update groups and
-        # batch_convert_external_user_ids_to_matrix_user_ids will return not_founds
-        mock_batch_convert.side_effect = lambda x: (
-            [],
-            ["external_id_1", "external_id_2"],
-        )
+        # batch_convert_external_user_ids_to_matrix_user_ids will return not_founds. The
+        # call to the external api for getting the members of group "new_group" need to
+        # not exist in the local database, which raises the error
+        mock_get_group_members.return_value = ["external_id_1", "external_id_2"]
         channel = self.make_request(
             method="POST",
             path=self.BASE_PATH + f"/{room_id}/groups",
@@ -888,11 +854,13 @@ class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
             "Some external user IDs could not be mapped to Matrix user IDs"
             in channel.json_body["error"]
         )
-        assert channel.json_body["details"] == ["external_id_1", "external_id_2"]
+        assert sorted(channel.json_body["details"]) == [
+            "external_id_1",
+            "external_id_2",
+        ]
 
     def test_leave_error_all_fail_response(
         self,
-        mock_batch_convert,
         mock_get_group_members,
     ) -> None:
         """Test that if leaving room raises errors for different users with different
@@ -913,7 +881,6 @@ class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
         test_member_1 = self.register_user("test_member_1", "password")
         test_member_2 = self.register_user("test_member_2", "password")
         mock_get_group_members.return_value = [test_member_1, test_member_2]
-        mock_batch_convert.side_effect = lambda x: (x, [])
         room_id = self._create_managed_room(name="Test Room", groups=[test_group_1])
 
         # Prepare test_group_2 which removes all 2 members and add a new member
@@ -982,7 +949,6 @@ class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
 
     def test_join_error_response(
         self,
-        mock_batch_convert,
         mock_get_group_members,
     ) -> None:
         """Test that if joining room raises an error, the endpoint returns an error with
@@ -999,12 +965,15 @@ class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
         test_member_1 = self.register_user("test_member_1", "password")
         test_member_2 = self.register_user("test_member_2", "password")
         non_existent_user = f"@random_user:{server_name}"
+        # Go ahead and register the external user id, this makes
+        # `batch_convert_external_user_ids_to_matrix_user_ids()` happy so we can check
+        # the response from `force_join_users_to_room()`. How realistic this is: unknown
+        self.register_external_id(non_existent_user)
         mock_get_group_members.side_effect = lambda group_id: (
             [test_member_1, test_member_2]
             if group_id == test_group_1
             else [test_member_2, non_existent_user]
         )
-        mock_batch_convert.side_effect = lambda x: (x, [])
         room_id = self._create_managed_room(name="Test Room", groups=[test_group_1])
 
         # Now update the group assignment to test_group_2, which has an already-joined
@@ -1046,7 +1015,6 @@ class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
 
     def test_both_join_and_leave_error_response(
         self,
-        mock_batch_convert,
         mock_get_group_members,
     ) -> None:
         """Test that if both joining and leaving room raise errors, the endpoint returns
@@ -1057,27 +1025,25 @@ class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
         test_member_1 = self.register_user("test_member_1", "password")
         test_member_2 = self.register_user("test_member_2", "password")
         non_existent_user = f"@random_user:{self.hs.hostname}"
+        # Go ahead and register the external user id, this makes
+        # `batch_convert_external_user_ids_to_matrix_user_ids()` happy so we can check
+        # the response from `force_join_users_to_room()`. How realistic this is: unknown
+        self.register_external_id(non_existent_user)
         mock_get_group_members.side_effect = lambda group_id: (
             [test_member_1, test_member_2]
             if group_id == test_group_1
             else [non_existent_user]
         )
-        mock_batch_convert.side_effect = lambda x: (x, [])
         room_id = self._create_managed_room(name="Test Room", groups=[test_group_1])
 
         # Now update the group assignment to test_group_2, which only has non-existent member.
         # Both `force_join_users_to_room` and `remove_users_from_room` will return errors.
         with (
             patch(
-                "famedly_control_synapse.room_handler.ManagedRoomHandler.force_join_users_to_room",
-                new_callable=AsyncMock,
-            ) as mock_force_join,
-            patch(
                 "famedly_control_synapse.room_handler.ManagedRoomHandler.remove_users_from_room",
                 new_callable=AsyncMock,
             ) as mock_remove,
         ):
-            mock_force_join.return_value = {non_existent_user: "User not found"}
             mock_remove.return_value = {test_member_1: "Unexpected error"}
 
             channel = self.make_request(
@@ -1099,7 +1065,7 @@ class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
 
     @override_config({"run_background_tasks_on": "fake_worker"})
     def test_non_background_worker_assign_groups_endpoint_disabled(
-        self, mock_batch_convert, mock_get_group_members
+        self, mock_get_group_members
     ) -> None:
         """
         Tests that the assign groups endpoint does not function on the incorrect
@@ -1119,10 +1085,6 @@ class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
     "famedly_control_synapse.client.FamedlyControlClient.get_group_members",
     new_callable=AsyncMock,
 )
-@patch(
-    "famedly_control_synapse.room_handler.ManagedRoomHandler.batch_convert_external_user_ids_to_matrix_user_ids",
-    new_callable=AsyncMock,
-)
 class TestListManagedRooms(ModuleApiTestCase):
     def prepare(self, reactor: MemoryReactor, clock: Clock, homeserver: HomeServer):
         super().prepare(reactor, clock, homeserver)
@@ -1130,9 +1092,7 @@ class TestListManagedRooms(ModuleApiTestCase):
         self.non_admin_token = self.login("non_admin", "password")
         self.account_data_handler = homeserver.get_account_data_handler()
 
-    def test_list_requires_admin(
-        self, mock_batch_convert, mock_get_group_members
-    ) -> None:
+    def test_list_requires_admin(self, mock_get_group_members) -> None:
         """Non-admin users should get a 403."""
         channel = self.make_request(
             method="GET",
@@ -1142,9 +1102,7 @@ class TestListManagedRooms(ModuleApiTestCase):
         )
         assert channel.code == HTTPStatus.FORBIDDEN, channel.result
 
-    def test_list_requires_auth(
-        self, mock_batch_convert, mock_get_group_members
-    ) -> None:
+    def test_list_requires_auth(self, mock_get_group_members) -> None:
         """Unauthenticated requests should get a 401."""
         channel = self.make_request(
             method="GET",
@@ -1153,7 +1111,7 @@ class TestListManagedRooms(ModuleApiTestCase):
         )
         assert channel.code == HTTPStatus.UNAUTHORIZED, channel.result
 
-    def test_list_empty(self, mock_batch_convert, mock_get_group_members) -> None:
+    def test_list_empty(self, mock_get_group_members) -> None:
         """Listing when no managed rooms exist should return empty chunk."""
         channel = self.make_request(
             method="GET",
@@ -1165,9 +1123,7 @@ class TestListManagedRooms(ModuleApiTestCase):
         assert channel.json_body["chunk"] == []
         assert channel.json_body["total_room_count_estimate"] == 0
 
-    def test_list_returns_managed_rooms(
-        self, mock_batch_convert, mock_get_group_members
-    ) -> None:
+    def test_list_returns_managed_rooms(self, mock_get_group_members) -> None:
         """Created managed rooms should appear in the listing."""
         user_1 = self.register_user("user1", "password")
         user_2 = self.register_user("user2", "password")
@@ -1182,7 +1138,6 @@ class TestListManagedRooms(ModuleApiTestCase):
             return []
 
         mock_get_group_members.side_effect = get_members_by_group
-        mock_batch_convert.side_effect = lambda x: (x, [])
 
         room_id = self._create_managed_room(
             name="Listed Room", groups=["group1", "group2"]
@@ -1205,7 +1160,7 @@ class TestListManagedRooms(ModuleApiTestCase):
             "group2",
         ]
 
-    def test_list_pagination(self, mock_batch_convert, mock_get_group_members) -> None:
+    def test_list_pagination(self, mock_get_group_members) -> None:
         """Pagination should work with from and limit params."""
         user_1 = self.register_user("user1", "password")
         user_2 = self.register_user("user2", "password")
@@ -1223,7 +1178,6 @@ class TestListManagedRooms(ModuleApiTestCase):
             return []
 
         mock_get_group_members.side_effect = get_members_by_group
-        mock_batch_convert.side_effect = lambda x: (x, [])
 
         room_ids = []
         for i in range(3):
@@ -1259,7 +1213,7 @@ class TestListManagedRooms(ModuleApiTestCase):
 
     @override_config({"run_background_tasks_on": "fake_worker"})
     def test_non_background_worker_list_endpoint_disabled(
-        self, mock_batch_convert, mock_get_group_members
+        self, mock_get_group_members
     ) -> None:
         """
         Tests that the assign groups endpoint does not function on the incorrect

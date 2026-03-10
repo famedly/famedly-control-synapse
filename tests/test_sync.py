@@ -40,11 +40,6 @@ class TestGroupMembershipSync(ModuleApiTestCase):
                 new_callable=AsyncMock,
                 return_value=[],
             ),
-            patch(
-                "famedly_control_synapse.room_handler.ManagedRoomHandler.batch_convert_external_user_ids_to_matrix_user_ids",
-                new_callable=AsyncMock,
-                side_effect=lambda x: (x, []),
-            ),
         ):
             config = CreateManagedRoomRequest(
                 room_alias_name=f"sync_room_{self._room_counter + 1}",
@@ -77,17 +72,12 @@ class TestGroupMembershipSync(ModuleApiTestCase):
         return None
 
     @patch(
-        "famedly_control_synapse.room_handler.ManagedRoomHandler.batch_convert_external_user_ids_to_matrix_user_ids",
-        new_callable=AsyncMock,
-    )
-    @patch(
         "famedly_control_synapse.client.FamedlyControlClient.get_all_groups_diffs",
         new_callable=AsyncMock,
     )
-    def test_sync_adds_users_to_room(self, mock_get_diffs, mock_batch_convert) -> None:
+    def test_sync_adds_users_to_room(self, mock_get_diffs) -> None:
         """Sync should add new users while leaving existing members unchanged."""
         room_id = self._create_managed_room_for_sync(groups=["group_a"])
-        mock_batch_convert.side_effect = lambda x: (x, [])
 
         # First sync: add member_1 as an existing member
         mock_get_diffs.return_value = ManyGroupsDiffResponse(
@@ -120,19 +110,12 @@ class TestGroupMembershipSync(ModuleApiTestCase):
         assert self._get_membership(room_id, self.member_1) == "join"
 
     @patch(
-        "famedly_control_synapse.room_handler.ManagedRoomHandler.batch_convert_external_user_ids_to_matrix_user_ids",
-        new_callable=AsyncMock,
-    )
-    @patch(
         "famedly_control_synapse.client.FamedlyControlClient.get_all_groups_diffs",
         new_callable=AsyncMock,
     )
-    def test_sync_removes_users_from_room(
-        self, mock_get_diffs, mock_batch_convert
-    ) -> None:
+    def test_sync_removes_users_from_room(self, mock_get_diffs) -> None:
         """Sync should remove specified users while leaving others unchanged."""
         room_id = self._create_managed_room_for_sync(groups=["group_b"])
-        mock_batch_convert.side_effect = lambda x: (x, [])
 
         # First add all three members
         mock_get_diffs.return_value = ManyGroupsDiffResponse(
@@ -168,20 +151,13 @@ class TestGroupMembershipSync(ModuleApiTestCase):
         assert self._get_membership(room_id, self.member_3) == "join"
 
     @patch(
-        "famedly_control_synapse.room_handler.ManagedRoomHandler.batch_convert_external_user_ids_to_matrix_user_ids",
-        new_callable=AsyncMock,
-    )
-    @patch(
         "famedly_control_synapse.client.FamedlyControlClient.get_all_groups_diffs",
         new_callable=AsyncMock,
     )
-    def test_sync_mixed_add_and_remove(
-        self, mock_get_diffs, mock_batch_convert
-    ) -> None:
+    def test_sync_mixed_add_and_remove(self, mock_get_diffs) -> None:
         """A single diff with both Add and Rem actions should add new users,
         remove specified users, and leave others unchanged."""
         room_id = self._create_managed_room_for_sync(groups=["group_mixed"])
-        mock_batch_convert.side_effect = lambda x: (x, [])
 
         # Set up initial state: member_1 and member_2 are in the room
         mock_get_diffs.return_value = ManyGroupsDiffResponse(
@@ -217,19 +193,12 @@ class TestGroupMembershipSync(ModuleApiTestCase):
         assert self._get_membership(room_id, self.member_2) == "join"
 
     @patch(
-        "famedly_control_synapse.room_handler.ManagedRoomHandler.batch_convert_external_user_ids_to_matrix_user_ids",
-        new_callable=AsyncMock,
-    )
-    @patch(
         "famedly_control_synapse.client.FamedlyControlClient.get_all_groups_diffs",
         new_callable=AsyncMock,
     )
-    def test_sync_advances_token_on_success(
-        self, mock_get_diffs, mock_batch_convert
-    ) -> None:
+    def test_sync_advances_token_on_success(self, mock_get_diffs) -> None:
         """Sync token should advance after successful processing."""
         self._create_managed_room_for_sync(groups=["group_c"])
-        mock_batch_convert.side_effect = lambda x: (x, [])
 
         self.syncer._sync_token = None
         mock_get_diffs.return_value = ManyGroupsDiffResponse(
@@ -288,11 +257,6 @@ class TestGroupMembershipSync(ModuleApiTestCase):
 
         with (
             patch(
-                "famedly_control_synapse.room_handler.ManagedRoomHandler.batch_convert_external_user_ids_to_matrix_user_ids",
-                new_callable=AsyncMock,
-                return_value=([self.member_1], []),
-            ),
-            patch(
                 "famedly_control_synapse.room_handler.ManagedRoomHandler.force_join_users_to_room",
                 new_callable=AsyncMock,
                 return_value={self.member_1: "user not found"},
@@ -319,19 +283,12 @@ class TestGroupMembershipSync(ModuleApiTestCase):
         assert self.syncer._sync_token is None
 
     @patch(
-        "famedly_control_synapse.room_handler.ManagedRoomHandler.batch_convert_external_user_ids_to_matrix_user_ids",
-        new_callable=AsyncMock,
-    )
-    @patch(
         "famedly_control_synapse.client.FamedlyControlClient.get_all_groups_diffs",
         new_callable=AsyncMock,
     )
-    def test_sync_handles_unknown_group(
-        self, mock_get_diffs, mock_batch_convert
-    ) -> None:
+    def test_sync_handles_unknown_group(self, mock_get_diffs) -> None:
         """Diffs for groups not assigned to any managed room should be ignored."""
         self._create_managed_room_for_sync(groups=["group_e"])
-        mock_batch_convert.side_effect = lambda x: (x, [])
 
         self.syncer._sync_token = None
         mock_get_diffs.return_value = ManyGroupsDiffResponse(
@@ -348,16 +305,10 @@ class TestGroupMembershipSync(ModuleApiTestCase):
         assert self.syncer._sync_token == "1"
 
     @patch(
-        "famedly_control_synapse.room_handler.ManagedRoomHandler.batch_convert_external_user_ids_to_matrix_user_ids",
-        new_callable=AsyncMock,
-    )
-    @patch(
         "famedly_control_synapse.client.FamedlyControlClient.get_all_groups_diffs",
         new_callable=AsyncMock,
     )
-    def test_sync_applies_diffs_to_multiple_rooms(
-        self, mock_get_diffs, mock_batch_convert
-    ) -> None:
+    def test_sync_applies_diffs_to_multiple_rooms(self, mock_get_diffs) -> None:
         """If multiple rooms share the same group, diffs should apply to all of them."""
         room_id_1 = self._create_managed_room_for_sync(
             name="Room 1", groups=["shared_group"]
@@ -365,7 +316,6 @@ class TestGroupMembershipSync(ModuleApiTestCase):
         room_id_2 = self._create_managed_room_for_sync(
             name="Room 2", groups=["shared_group"]
         )
-        mock_batch_convert.side_effect = lambda x: (x, [])
 
         mock_get_diffs.return_value = ManyGroupsDiffResponse(
             next_sync="1",
