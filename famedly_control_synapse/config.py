@@ -39,6 +39,15 @@ class FamedlyControlApiConfig(BaseModel):
 
 class FamedlyControlConfig(BaseModel):
     famedly_control: FamedlyControlApiConfig
+    sync_enabled: bool = Field(
+        default=True,
+        description="Whether to run the background group membership sync loop",
+    )
+    sync_polling_interval_seconds: int = Field(
+        default=30,
+        ge=1,
+        description="Delay in seconds before retrying after a sync failure",
+    )
     auth_provider: str = Field(
         ...,
         description="The unique, internal ID of the external identity provider, used in the database to link external user IDs to Matrix user IDs",

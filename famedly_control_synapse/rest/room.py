@@ -52,12 +52,14 @@ class CreateManagedRoomResource(RestServlet):
         api: ModuleApi,
         client: FamedlyControlClient,
         room_handler: ManagedRoomHandler,
+        repository: ManagedRoomRepository,
     ) -> None:
         super().__init__()
         self.api = api
         self.client = client
         self.account_data_handler = self.api._account_data_handler
         self.room_handler = room_handler
+        self.repository = repository
 
     async def on_POST(self, request: SynapseRequest) -> tuple[int, JsonDict]:
         """Handle POST requests to create a new managed room."""
@@ -104,6 +106,8 @@ class CreateManagedRoomResource(RestServlet):
             MANAGED_ROOM_TYPE,
             {"groups": validated_room_config.groups},
         )
+
+        await self.repository.initialize_sync_token(admin_user_id)
 
         member_external_ids = set()
         try:
@@ -271,30 +275,29 @@ class AssignGroupsToManagedRoomResource(RestServlet):
         members_to_add.discard(user_id)
         members_to_remove.discard(user_id)
 
-        # Remove members who are no longer in any assigned group
-        leave_errors = await self.room_handler.remove_users_from_room(
-            user_id, list(members_to_remove), room_id
+        # Apply membership changes
+        result = await self.room_handler.apply_membership_changes(
+            room_id, user_id, list(members_to_add), list(members_to_remove)
         )
-        if leave_errors:
+        if result.leave_errors:
             logger.warning(
-                "Some members failed to leave room %s: %s", room_id, leave_errors
+                "Some members failed to leave room %s: %s",
+                room_id,
+                result.leave_errors,
             )
             return 207, {
                 "error": "Failed to remove some members from the room",
-                "details": leave_errors,
+                "details": result.leave_errors,
             }
-
-        # Add the new members who are not joined yet
-        join_errors = await self.room_handler.force_join_users_to_room(
-            room_id, list(members_to_add), requester
-        )
-        if join_errors:
+        if result.join_errors:
             logger.warning(
-                "Some members failed to join room %s: %s", room_id, join_errors
+                "Some members failed to join room %s: %s",
+                room_id,
+                result.join_errors,
             )
             return 207, {
                 "error": "Failed to add some members to the room",
-                "details": join_errors,
+                "details": result.join_errors,
             }
 
         # Update room account data with new groups information

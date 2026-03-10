@@ -31,6 +31,8 @@ modules:
         famedly_control:
           api_url: str = "", # Prefix of the current famedly control http API
           access_token: str = "", # Access token to authenticate against famedly control
+        sync_enabled: bool = true, # Whether to run the background group membership sync loop
+        sync_polling_interval_seconds: int = 30, # Interval in seconds between polling requests
         auth_provider: str = "", # The unique, internal ID of the external identity provider.
 ```
 

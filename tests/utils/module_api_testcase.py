@@ -107,6 +107,7 @@ class ModuleApiTestCase(synapsetest.HomeserverTestCase):
                             "access_token": "dummy_token_for_testing",
                         },
                         "auth_provider": "https://idp.example.com/",
+                        "sync_enabled": False,
                     },
                 }
             ]
