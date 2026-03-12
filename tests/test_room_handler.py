@@ -1,6 +1,7 @@
 from http import HTTPStatus
 from unittest.mock import AsyncMock, patch
 
+import parameterized
 from synapse.api.errors import Codes, SynapseError
 from synapse.server import HomeServer
 from synapse.util.clock import Clock
@@ -11,7 +12,9 @@ from famedly_control_synapse.room_handler import famedly_control_user_sync_error
 from tests.utils.module_api_testcase import ModuleApiTestCase
 
 
+@parameterized.parameterized_class(("room_version",), [("10",), ("12",)])
 class TestRoomHandler(ModuleApiTestCase):
+    room_version: str
 
     def prepare(self, reactor: MemoryReactor, clock: Clock, homeserver: HomeServer):
         super().prepare(reactor, clock, homeserver)
@@ -39,6 +42,7 @@ class TestRoomHandler(ModuleApiTestCase):
             room_alias_name="membership_test_room",
             name="Membership Test Room",
             groups=["test_group"],
+            room_version=self.room_version,
         )
         with (
             patch(

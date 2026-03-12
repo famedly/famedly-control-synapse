@@ -1,6 +1,7 @@
 from http import HTTPStatus
 from unittest.mock import AsyncMock, patch
 
+import parameterized
 from synapse.server import HomeServer
 from synapse.util.clock import Clock
 from twisted.internet.testing import MemoryReactor
@@ -9,7 +10,10 @@ from famedly_control_synapse.rest.types import CreateManagedRoomRequest
 from tests.utils.module_api_testcase import ModuleApiTestCase
 
 
+@parameterized.parameterized_class(("room_version",), [("10",), ("12",)])
 class TestMembershipHook(ModuleApiTestCase):
+    room_version: str
+
     def prepare(self, reactor: MemoryReactor, clock: Clock, homeserver: HomeServer):
         super().prepare(reactor, clock, homeserver)
         self.non_admin = self.register_user("non_admin", "password", admin=False)
@@ -22,6 +26,7 @@ class TestMembershipHook(ModuleApiTestCase):
             room_alias_name="membership_test_room",
             name=name,
             groups=groups or ["test_group"],
+            room_version=self.room_version,
         )
         with (
             patch(
