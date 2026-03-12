@@ -46,7 +46,7 @@ class GroupMembersResponse(BaseModel):
 class FamedlyControlClient:
     def __init__(self, api: ModuleApi, config: FamedlyControlConfig):
         self.access_token = config.famedly_control.access_token
-        self.url = config.famedly_control.api_url
+        self.url = config.famedly_control.api_url.encoded_string().rstrip("/")
         self.http_client = api.http_client
         self.sync = 0
 
@@ -62,7 +62,7 @@ class FamedlyControlClient:
         Raises:
             FamedlyControlError: If the API returns an error or network failure occurs.
         """
-        uri = str(self.url) + "/get_group_members"
+        uri = self.url + "/get_group_members"
         body = {
             "group_id": group_id,
         }
@@ -111,7 +111,7 @@ class FamedlyControlClient:
         Raises:
             FamedlyControlError: If the API returns an error or network failure occurs.
         """
-        uri = str(self.url) + "/get_all_groups_diffs"
+        uri = self.url + "/get_all_groups_diffs"
         body: dict = {
             "timeout": timeout,
         }
