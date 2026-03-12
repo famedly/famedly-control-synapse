@@ -217,6 +217,96 @@ class TestManagedRoomCreation(ModuleApiTestCase):
         invitee_pl = event_auth.get_user_power_level(self.invitee, auth_events)
         assert invitee_pl == 0, "Invitee should have power level 0"
 
+    def test_room_creation_user_powerlevel_room_v10(
+        self, mock_batch_convert, mock_get_group_members
+    ) -> None:
+        """Test that a user powerlevel override works, room v10"""
+        mock_get_group_members.return_value = [
+            self.invitee
+        ]  # in real case this should be external_ids
+        mock_batch_convert.side_effect = lambda x: (x, [])
+        room_config = self.room_config_v10()
+        power_level_content_override = room_config.setdefault(
+            "power_level_content_override", {}
+        )
+        users = power_level_content_override.setdefault("users", {})
+        users.setdefault(self.invitee, 1)
+        channel = self.make_request(
+            method="POST",
+            path=self.CREATE_PATH,
+            content=room_config,
+            access_token=self.creator_access_token,
+            shorthand=False,
+        )
+        assert channel.code == HTTPStatus.OK, channel.result
+        room_id = channel.json_body["room_id"]
+
+        # Check if the creator has infinite power level and no other user has the same power level
+        auth_events = self.get_success(
+            self.hs.get_storage_controllers().state.get_current_state(
+                room_id,
+                StateFilter.from_types(
+                    [
+                        POWER_KEY,
+                        CREATE_KEY,
+                    ]
+                ),
+            )
+        )
+        creator_pl = event_auth.get_user_power_level(self.creator, auth_events)
+        assert (
+            creator_pl == CREATOR_POWER_LEVEL - 1
+        ), "Creator should have infinite power level"
+
+        # Check the invited user's power level
+        invitee_pl = event_auth.get_user_power_level(self.invitee, auth_events)
+        assert invitee_pl == 1, "Invitee should have power level 1"
+
+    def test_room_creation_user_powerlevel_with_room_v12(
+        self, mock_batch_convert, mock_get_group_members
+    ) -> None:
+        """Test that a user powerlevel override works, room v12"""
+        mock_get_group_members.return_value = [
+            self.invitee
+        ]  # in real case this should be external_ids
+        mock_batch_convert.side_effect = lambda x: (x, [])
+        room_config = self.room_config_v12()
+        power_level_content_override = room_config.setdefault(
+            "power_level_content_override", {}
+        )
+        users = power_level_content_override.setdefault("users", {})
+        users.setdefault(self.invitee, 1)
+        channel = self.make_request(
+            method="POST",
+            path=self.CREATE_PATH,
+            content=room_config,
+            access_token=self.creator_access_token,
+            shorthand=False,
+        )
+        assert channel.code == HTTPStatus.OK, channel.result
+        room_id = channel.json_body["room_id"]
+
+        # Check if the creator has ultimate power level and no other user has the same power level
+        auth_events = self.get_success(
+            self.hs.get_storage_controllers().state.get_current_state(
+                room_id,
+                StateFilter.from_types(
+                    [
+                        POWER_KEY,
+                        CREATE_KEY,
+                    ]
+                ),
+            )
+        )
+        creator_pl = event_auth.get_user_power_level(self.creator, auth_events)
+        assert (
+            creator_pl == 9007199254740992
+        ), "Creator should have power level 9007199254740992"
+
+        # Check the invited user's power level
+        invitee_pl = event_auth.get_user_power_level(self.invitee, auth_events)
+        assert invitee_pl == 1, "Invitee should have power level 1"
+
     def test_room_created_with_members_joined(
         self, mock_batch_convert, mock_get_group_members
     ) -> None:

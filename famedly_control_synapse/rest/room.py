@@ -90,10 +90,9 @@ class CreateManagedRoomResource(RestServlet):
             }
 
         if not room_version.msc4289_creator_power_enabled:
-            if "power_level_content_override" in room_config:
-                validated_room_config.power_level_content_override.users = {
-                    admin_user_id: CREATOR_POWER_LEVEL - 1
-                }
+            validated_room_config.power_level_content_override.users[admin_user_id] = (
+                CREATOR_POWER_LEVEL - 1
+            )
 
         room_id, _ = await self.api.create_room(
             admin_user_id,

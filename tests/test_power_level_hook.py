@@ -1,6 +1,7 @@
 from http import HTTPStatus
 from unittest.mock import AsyncMock, patch
 
+import parameterized
 from synapse.api.constants import CREATOR_POWER_LEVEL, EventTypes
 from synapse.server import HomeServer
 from synapse.util.clock import Clock
@@ -10,7 +11,9 @@ from famedly_control_synapse.rest.types import CreateManagedRoomRequest
 from tests.utils.module_api_testcase import ModuleApiTestCase
 
 
+@parameterized.parameterized_class(("room_version",), [("10",), ("12",)])
 class TestPowerLevelHook(ModuleApiTestCase):
+    room_version: str
     CREATE_PATH = "/_famedlyControl/v1/managedRooms/createRoom"
 
     def prepare(self, reactor: MemoryReactor, clock: Clock, homeserver: HomeServer):
@@ -24,7 +27,7 @@ class TestPowerLevelHook(ModuleApiTestCase):
         config = CreateManagedRoomRequest(
             room_alias_name="pl_test_room",
             name=name,
-            room_version="12",
+            room_version=self.room_version,
             groups=groups or ["test_group"],
         )
         with (
