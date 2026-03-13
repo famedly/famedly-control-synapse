@@ -46,7 +46,6 @@ class TestManagedRoomCreation(ModuleApiTestCase):
             room_alias_name="test_room_alias",
             name="Test Room",
             room_version="10",
-            creation_content=CreationContent(creator=self.creator),
             topic="This is a test room",
             groups=["test_group"],
         )
