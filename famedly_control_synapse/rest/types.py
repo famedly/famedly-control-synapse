@@ -2,7 +2,12 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic_core.core_schema import ValidationInfo
-from synapse.api.constants import EventTypes, GuestAccess, Membership
+from synapse.api.constants import (
+    CREATOR_POWER_LEVEL,
+    EventTypes,
+    GuestAccess,
+    Membership,
+)
 from synapse.types import JsonDict
 
 MANAGED_ROOM_TYPE = "de.famedly.managedRoom"
@@ -30,20 +35,20 @@ class CreationContent(BaseModel):
 class PowerLevelEventContent(BaseModel):
     """Power level event content for overriding default power levels."""
 
-    ban: int = 100
+    ban: int = CREATOR_POWER_LEVEL - 1
     events: dict[str, int] = Field(
         default_factory=lambda: {
             EventTypes.Name: 100,
             EventTypes.Topic: 100,
-            EventTypes.PowerLevels: 100,
-            EventTypes.JoinRules: 100,
+            EventTypes.PowerLevels: CREATOR_POWER_LEVEL - 1,
+            EventTypes.JoinRules: CREATOR_POWER_LEVEL - 1,
             EventTypes.CanonicalAlias: 100,
             EventTypes.RoomAvatar: 100,
         }
     )
     events_default: int = 0
-    invite: int = 100
-    kick: int = 100
+    invite: int = CREATOR_POWER_LEVEL - 1
+    kick: int = CREATOR_POWER_LEVEL - 1
     redact: int = 100
     state_default: int = 100
     users: dict[str, int] = Field(default_factory=dict)
