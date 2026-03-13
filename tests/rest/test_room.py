@@ -9,6 +9,7 @@ from synapse.api.constants import (
     Membership,
 )
 from synapse.api.errors import Codes, SynapseError
+from synapse.api.room_versions import KNOWN_ROOM_VERSIONS
 from synapse.server import HomeServer
 from synapse.types import JsonDict
 from synapse.types.state import StateFilter
@@ -59,6 +60,18 @@ class TestManagedRoomCreation(ModuleApiTestCase):
             "3pid_invites": ["something"],  # Invalid field
         }
         return config
+
+    def _get_creator_powerlevel(self, room_version: str) -> int:
+        """
+        Per the room version, what is our defined room creator power level
+        """
+        if KNOWN_ROOM_VERSIONS[room_version].msc4289_creator_power_enabled:
+            # Room's v12 and up have a power level that is not representable in
+            # canonicaljson, 2**53, which is 9007199254740992
+            return CREATOR_POWER_LEVEL
+        # Rooms prior to version 12 are limited to (2**53) - 1, which is representable
+        # and therefore can be in the JSON structure
+        return CREATOR_POWER_LEVEL - 1
 
     def test_room_creation_success(self, mock_get_group_members) -> None:
         """Tests that managed room creation returns the expected response"""
@@ -162,8 +175,8 @@ class TestManagedRoomCreation(ModuleApiTestCase):
             )
         )
         creator_pl = event_auth.get_user_power_level(self.creator, auth_events)
-        assert (
-            creator_pl == 9007199254740992
+        assert creator_pl == self._get_creator_powerlevel(
+            "12"
         ), "Creator should have power level 9007199254740992"
 
         # Check the invited user's power level
@@ -200,8 +213,8 @@ class TestManagedRoomCreation(ModuleApiTestCase):
             )
         )
         creator_pl = event_auth.get_user_power_level(self.creator, auth_events)
-        assert (
-            creator_pl == CREATOR_POWER_LEVEL - 1
+        assert creator_pl == self._get_creator_powerlevel(
+            "10"
         ), "Creator should have infinite power level"
 
         # Check the invited user's power level
@@ -244,8 +257,8 @@ class TestManagedRoomCreation(ModuleApiTestCase):
             )
         )
         creator_pl = event_auth.get_user_power_level(self.creator, auth_events)
-        assert (
-            creator_pl == CREATOR_POWER_LEVEL - 1
+        assert creator_pl == self._get_creator_powerlevel(
+            "10"
         ), "Creator should have infinite power level"
 
         # Check the invited user's power level
@@ -288,8 +301,8 @@ class TestManagedRoomCreation(ModuleApiTestCase):
             )
         )
         creator_pl = event_auth.get_user_power_level(self.creator, auth_events)
-        assert (
-            creator_pl == 9007199254740992
+        assert creator_pl == self._get_creator_powerlevel(
+            "12"
         ), "Creator should have power level 9007199254740992"
 
         # Check the invited user's power level
