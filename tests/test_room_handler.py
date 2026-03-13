@@ -50,11 +50,6 @@ class TestRoomHandler(ModuleApiTestCase):
                 new_callable=AsyncMock,
                 return_value=[],
             ),
-            patch(
-                "famedly_control_synapse.room_handler.ManagedRoomHandler.batch_convert_external_user_ids_to_matrix_user_ids",
-                new_callable=AsyncMock,
-                side_effect=lambda x: (x, []),
-            ),
         ):
             channel = self.make_request(
                 method="POST",
@@ -418,11 +413,7 @@ class TestRoomHandler(ModuleApiTestCase):
         "famedly_control_synapse.client.FamedlyControlClient.get_group_members",
         new_callable=AsyncMock,
     )
-    @patch(
-        "famedly_control_synapse.room_handler.ManagedRoomHandler.batch_convert_external_user_ids_to_matrix_user_ids",
-        new_callable=AsyncMock,
-    )
-    def test_get_room_creator(self, mock_batch_convert, mock_get_group_members) -> None:
+    def test_get_room_creator(self, mock_get_group_members) -> None:
         # Create a room and get its ID
         group_1 = "group_1"
         member_a = self.register_user("test_member_a", "password")
@@ -432,7 +423,6 @@ class TestRoomHandler(ModuleApiTestCase):
         mock_get_group_members.return_value = (
             group_1_members  # in real case this should be external_ids
         )
-        mock_batch_convert.side_effect = lambda x: (x, [])
 
         room_id = self._create_managed_room(
             name="Test Room with Group Members", groups=[group_1]

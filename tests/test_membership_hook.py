@@ -34,11 +34,6 @@ class TestMembershipHook(ModuleApiTestCase):
                 new_callable=AsyncMock,
                 return_value=[],
             ),
-            patch(
-                "famedly_control_synapse.room_handler.ManagedRoomHandler.batch_convert_external_user_ids_to_matrix_user_ids",
-                new_callable=AsyncMock,
-                side_effect=lambda x: (x, []),
-            ),
         ):
             channel = self.make_request(
                 method="POST",
