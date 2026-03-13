@@ -11,7 +11,7 @@ from synapse.api.constants import (
 from synapse.api.errors import Codes, SynapseError
 from synapse.api.room_versions import KNOWN_ROOM_VERSIONS
 from synapse.server import HomeServer
-from synapse.types import JsonDict
+from synapse.types import JsonDict, StateMap
 from synapse.types.state import StateFilter
 from synapse.util.clock import Clock
 from twisted.internet.testing import MemoryReactor
@@ -25,6 +25,8 @@ from tests.utils.module_api_testcase import ModuleApiTestCase
 
 CREATE_KEY = (EventTypes.Create, "")
 POWER_KEY = (EventTypes.PowerLevels, "")
+GUEST_ACCESS_KEY = (EventTypes.GuestAccess, "")
+JOIN_RULES_KEY = (EventTypes.JoinRules, "")
 
 
 @patch(
@@ -73,6 +75,21 @@ class TestManagedRoomCreation(ModuleApiTestCase):
         # and therefore can be in the JSON structure
         return CREATOR_POWER_LEVEL - 1
 
+    def _get_state_map_of_room(self, room_id: str) -> StateMap:
+        return self.get_success(
+            self.hs.get_storage_controllers().state.get_current_state(
+                room_id,
+                StateFilter.from_types(
+                    [
+                        POWER_KEY,
+                        CREATE_KEY,
+                        GUEST_ACCESS_KEY,
+                        JOIN_RULES_KEY,
+                    ]
+                ),
+            )
+        )
+
     def test_room_creation_success(self, mock_get_group_members) -> None:
         """Tests that managed room creation returns the expected response"""
         mock_get_group_members.return_value = [
@@ -91,14 +108,8 @@ class TestManagedRoomCreation(ModuleApiTestCase):
         room_id = channel.json_body["room_id"]
 
         # Check if the room has the correct configuration
-        state_map = self.get_success(
-            self.hs.get_storage_controllers().state.get_current_state(
-                room_id,
-                StateFilter.from_types(
-                    [(EventTypes.GuestAccess, None), (EventTypes.JoinRules, None)]
-                ),
-            )
-        )
+        state_map = self._get_state_map_of_room(room_id)
+
         assert state_map[EventTypes.JoinRules, ""].content == {
             "join_rule": "invite"
         }, "Join rules should be set to invite"
@@ -163,24 +174,15 @@ class TestManagedRoomCreation(ModuleApiTestCase):
         room_id = channel.json_body["room_id"]
 
         # Check if the creator has ultimate power level and no other user has the same power level
-        auth_events = self.get_success(
-            self.hs.get_storage_controllers().state.get_current_state(
-                room_id,
-                StateFilter.from_types(
-                    [
-                        POWER_KEY,
-                        CREATE_KEY,
-                    ]
-                ),
-            )
-        )
-        creator_pl = event_auth.get_user_power_level(self.creator, auth_events)
+        state_map = self._get_state_map_of_room(room_id)
+
+        creator_pl = event_auth.get_user_power_level(self.creator, state_map)
         assert creator_pl == self._get_creator_powerlevel(
             "12"
         ), "Creator should have power level 9007199254740992"
 
         # Check the invited user's power level
-        invitee_pl = event_auth.get_user_power_level(self.invitee, auth_events)
+        invitee_pl = event_auth.get_user_power_level(self.invitee, state_map)
         assert invitee_pl == 0, "Invitee should have power level 0"
 
     def test_room_creation_powerlevel_with_room_v10(
@@ -201,24 +203,15 @@ class TestManagedRoomCreation(ModuleApiTestCase):
         room_id = channel.json_body["room_id"]
 
         # Check if the creator has infinite power level and no other user has the same power level
-        auth_events = self.get_success(
-            self.hs.get_storage_controllers().state.get_current_state(
-                room_id,
-                StateFilter.from_types(
-                    [
-                        POWER_KEY,
-                        CREATE_KEY,
-                    ]
-                ),
-            )
-        )
-        creator_pl = event_auth.get_user_power_level(self.creator, auth_events)
+        state_map = self._get_state_map_of_room(room_id)
+
+        creator_pl = event_auth.get_user_power_level(self.creator, state_map)
         assert creator_pl == self._get_creator_powerlevel(
             "10"
         ), "Creator should have infinite power level"
 
         # Check the invited user's power level
-        invitee_pl = event_auth.get_user_power_level(self.invitee, auth_events)
+        invitee_pl = event_auth.get_user_power_level(self.invitee, state_map)
         assert invitee_pl == 0, "Invitee should have power level 0"
 
     def test_room_creation_user_powerlevel_room_v10(
@@ -245,24 +238,15 @@ class TestManagedRoomCreation(ModuleApiTestCase):
         room_id = channel.json_body["room_id"]
 
         # Check if the creator has infinite power level and no other user has the same power level
-        auth_events = self.get_success(
-            self.hs.get_storage_controllers().state.get_current_state(
-                room_id,
-                StateFilter.from_types(
-                    [
-                        POWER_KEY,
-                        CREATE_KEY,
-                    ]
-                ),
-            )
-        )
-        creator_pl = event_auth.get_user_power_level(self.creator, auth_events)
+        state_map = self._get_state_map_of_room(room_id)
+
+        creator_pl = event_auth.get_user_power_level(self.creator, state_map)
         assert creator_pl == self._get_creator_powerlevel(
             "10"
         ), "Creator should have infinite power level"
 
         # Check the invited user's power level
-        invitee_pl = event_auth.get_user_power_level(self.invitee, auth_events)
+        invitee_pl = event_auth.get_user_power_level(self.invitee, state_map)
         assert invitee_pl == 1, "Invitee should have power level 1"
 
     def test_room_creation_user_powerlevel_with_room_v12(
@@ -289,24 +273,15 @@ class TestManagedRoomCreation(ModuleApiTestCase):
         room_id = channel.json_body["room_id"]
 
         # Check if the creator has ultimate power level and no other user has the same power level
-        auth_events = self.get_success(
-            self.hs.get_storage_controllers().state.get_current_state(
-                room_id,
-                StateFilter.from_types(
-                    [
-                        POWER_KEY,
-                        CREATE_KEY,
-                    ]
-                ),
-            )
-        )
-        creator_pl = event_auth.get_user_power_level(self.creator, auth_events)
+        state_map = self._get_state_map_of_room(room_id)
+
+        creator_pl = event_auth.get_user_power_level(self.creator, state_map)
         assert creator_pl == self._get_creator_powerlevel(
             "12"
         ), "Creator should have power level 9007199254740992"
 
         # Check the invited user's power level
-        invitee_pl = event_auth.get_user_power_level(self.invitee, auth_events)
+        invitee_pl = event_auth.get_user_power_level(self.invitee, state_map)
         assert invitee_pl == 1, "Invitee should have power level 1"
 
     def test_room_created_with_members_joined(self, mock_get_group_members) -> None:
