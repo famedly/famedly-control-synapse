@@ -14,11 +14,17 @@
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
 from unittest.mock import AsyncMock, MagicMock
 
+from parameterized import parameterized
+from synapse.api.errors import HttpResponseException
+from synapse.server import HomeServer
+from synapse.util.clock import Clock
 from twisted.internet.defer import ensureDeferred
+from twisted.internet.testing import MemoryReactor
 from twisted.trial import unittest
 
-from famedly_control_synapse.client import FamedlyControlClient
+from famedly_control_synapse.client import FamedlyControlClient, FamedlyControlError
 from famedly_control_synapse.config import FamedlyControlConfig
+from tests.utils.module_api_testcase import ModuleApiTestCase
 
 
 def _make_client(api_url: str):
@@ -103,3 +109,127 @@ class TestClientUrlConstruction(unittest.TestCase):
                 "http://api.example.com/get_all_groups_diffs",
                 f"Failed for api_url={api_url!r}",
             )
+
+
+class TestClientResponse(ModuleApiTestCase):
+
+    def prepare(self, reactor: MemoryReactor, clock: Clock, homeserver: HomeServer):
+        super().prepare(reactor, clock, homeserver)
+        self.client = self.hs.room_control.client
+
+    def test_request_success(self):
+        """Test that client returns the expected list of member IDs on success."""
+        expected_members = ["user1_external_id", "user2_external_id"]
+
+        self.client.http_client.post_json_get_json = AsyncMock(
+            return_value={
+                "Ok": {
+                    "members": [
+                        {"user_id": "user1_external_id"},
+                        {"user_id": "user2_external_id"},
+                    ]
+                }
+            }
+        )
+        members = self.get_success(self.client.get_group_members("test_group"))
+        assert members == expected_members
+
+    @parameterized.expand([("Forbidden", 403), ("Unauthorized", 401)])
+    def test_request_fail_with_err_response_types(self, error_type, expected_code):
+        """Test that client returns 200 with Err message raises FamedlyControlError with proper code."""
+        self.client.http_client.post_json_get_json = AsyncMock(
+            return_value={"Err": {"type": error_type}}
+        )
+        failure = self.get_failure(
+            self.client.get_group_members("test_group"), FamedlyControlError
+        )
+        assert failure.value.code == expected_code
+        assert (
+            failure.value.msg == f"Famedly Control API: Error in response: {error_type}"
+        )
+
+    def test_request_fail_with_err_response_unknown_type(self):
+        """Test that client returns 200 with Err message with unknown type raises FamedlyControlError with 500 code."""
+        self.client.http_client.post_json_get_json = AsyncMock(
+            return_value={"Err": {"type": "SomeUnknownType"}}
+        )
+        failure = self.get_failure(
+            self.client.get_group_members("test_group"), FamedlyControlError
+        )
+        self.assertEqual(failure.value.code, 500)
+        assert failure.value.code == 500
+        assert (
+            failure.value.msg
+            == "Famedly Control API: Error in response: SomeUnknownType"
+        )
+
+    def test_request_fail_with_err_response_not_dict(self):
+        """Test that client returns 200 with Err message with non dict format raises FamedlyControlError with 500 code."""
+        self.client.http_client.post_json_get_json = AsyncMock(
+            return_value={"Err": "SomeError"}
+        )
+        failure = self.get_failure(
+            self.client.get_group_members("test_group"), FamedlyControlError
+        )
+        assert failure.value.code == 500
+        assert (
+            failure.value.msg
+            == "Famedly Control API: Unexpected error: 'str' object has no attribute 'get'"
+        )
+
+    def test_request_fail_with_unexpected_response(self):
+        """Test that client raises FamedlyControlError when response format is neither "Ok" nor "Err"."""
+        self.client.http_client.post_json_get_json = AsyncMock(
+            return_value={"Unexpected": "format"}
+        )
+        failure = self.get_failure(
+            self.client.get_group_members("test_group"), FamedlyControlError
+        )
+        assert failure.value.code == 502
+        assert (
+            failure.value.msg
+            == "Famedly Control API: Unexpected response format: {'Unexpected': 'format'}"
+        )
+
+    def test_request_fail_with_http_exception(self):
+        """Test that client raises any other HTTP error raises FamedlyControlError."""
+        self.client.http_client.post_json_get_json = AsyncMock(
+            side_effect=HttpResponseException(500, "Internal Server Error", b"")
+        )
+        failure = self.get_failure(
+            self.client.get_group_members("test_group"), FamedlyControlError
+        )
+        assert failure.value.code == 500
+        assert (
+            failure.value.msg
+            == "Famedly Control API: HTTP response error: Internal Server Error"
+        )
+
+    def test_request_fail_with_validation_error(self):
+        """Test that client raises FamedlyControlError on validation error."""
+        self.client.http_client.post_json_get_json = AsyncMock(
+            return_value={
+                "Ok": {"members": "not_a_list"}
+            }  # invalid: members must be a list
+        )
+        failure = self.get_failure(
+            self.client.get_group_members("test_group"), FamedlyControlError
+        )
+        assert failure.value.code == 500
+        assert failure.value.msg.startswith(
+            "Famedly Control API: Unexpected error: 1 validation error for GroupMembersResponse"
+        )
+
+    def test_request_fail_with_generic_exception(self):
+        """Test that client raises FamedlyControlError on any unexpected exception."""
+        self.client.http_client.post_json_get_json = AsyncMock(
+            side_effect=RuntimeError("something broke")
+        )
+        failure = self.get_failure(
+            self.client.get_group_members("test_group"), FamedlyControlError
+        )
+        assert failure.value.code == 500
+        assert (
+            failure.value.msg
+            == "Famedly Control API: Unexpected error: something broke"
+        )

@@ -1,13 +1,16 @@
 import logging
-from typing import Final, Literal
+from http import HTTPStatus
+from typing import Final, Literal, TypeVar
 
 from pydantic import BaseModel, Field
-from synapse.api.errors import SynapseError
+from synapse.api.errors import HttpResponseException, SynapseError
 from synapse.module_api import ModuleApi
 
 from famedly_control_synapse.config import FamedlyControlConfig
 
 logger = logging.getLogger(__name__)
+
+_T = TypeVar("_T", bound=BaseModel)
 
 
 class Membership:
@@ -43,12 +46,64 @@ class GroupMembersResponse(BaseModel):
     members: list[MemberInfo]
 
 
+_ERROR_TYPE_TO_STATUS_CODE: dict[str, HTTPStatus] = {
+    # This is based on GroupMembershipDiffApi.yaml
+    "Internal": HTTPStatus.INTERNAL_SERVER_ERROR,
+    "Forbidden": HTTPStatus.FORBIDDEN,
+    "Unauthorized": HTTPStatus.UNAUTHORIZED,
+    "Api": HTTPStatus.BAD_GATEWAY,
+}
+
+
 class FamedlyControlClient:
     def __init__(self, api: ModuleApi, config: FamedlyControlConfig):
         self.access_token = config.famedly_control.access_token
         self.url = config.famedly_control.api_url.encoded_string().rstrip("/")
         self.http_client = api.http_client
         self.sync = 0
+
+    async def _request(self, uri: str, body: dict, model: type[_T]) -> _T:
+        """POST to the Famedly Control API and return a validated response model.
+
+        Args:
+            uri: The full URI to POST to.
+            body: The JSON body to include in the POST request.
+            model: The Pydantic model class to validate the "Ok" response against.
+
+        Raises:
+            FamedlyControlError: For all error conditions (API errors, network
+                failures, validation errors, or any other unexpected exception).
+        """
+        try:
+            response = await self.http_client.post_json_get_json(
+                uri,
+                body,
+                headers={"Authorization": f"Bearer {self.access_token}"},
+            )
+            if "Ok" in response:
+                return model.model_validate(response["Ok"])
+            elif "Err" in response:
+                error_type = response["Err"].get("type")
+                status_code = _ERROR_TYPE_TO_STATUS_CODE.get(
+                    error_type, HTTPStatus.INTERNAL_SERVER_ERROR
+                )
+                msg = f"Famedly Control API: Error in response: {error_type}"
+                logger.error(msg)
+                raise FamedlyControlError(status_code, msg)
+            else:
+                msg = f"Famedly Control API: Unexpected response format: {response}"
+                logger.error(msg)
+                raise FamedlyControlError(HTTPStatus.BAD_GATEWAY, msg)
+        except FamedlyControlError:
+            raise
+        except HttpResponseException as e:
+            msg = f"Famedly Control API: HTTP response error: {e.msg}"
+            logger.error(msg)
+            raise FamedlyControlError(e.code, msg) from e
+        except Exception as e:
+            msg = f"Famedly Control API: Unexpected error: {e}"
+            logger.error(msg)
+            raise FamedlyControlError(msg=msg) from e
 
     async def get_group_members(self, group_id: str) -> list[str]:
         """Get the current members of a group.
@@ -62,37 +117,12 @@ class FamedlyControlClient:
         Raises:
             FamedlyControlError: If the API returns an error or network failure occurs.
         """
-        uri = self.url + "/get_group_members"
-        body = {
-            "group_id": group_id,
-        }
-        try:
-            response = await self.http_client.post_json_get_json(
-                uri,
-                body,
-                headers={"Authorization": f"Bearer {self.access_token}"},
-            )
-            if "Ok" in response:
-                validated_response = GroupMembersResponse.model_validate(response["Ok"])
-                return [
-                    member.external_user_id for member in validated_response.members
-                ]
-            elif "Err" in response:
-                error_type = response["Err"].get("type")
-                logger.error("Famedly Control API Error: %s", error_type)
-                raise FamedlyControlError(
-                    500, f"Famedly Control API Error: {error_type}"
-                )
-            else:
-                logger.error("Famedly Control API Error: %s", response)
-                raise FamedlyControlError(
-                    500, f"Unexpected response format: {response}"
-                )
-        except FamedlyControlError:
-            raise
-        except Exception as e:
-            logger.error("Famedly Control API Error: %s", e)
-            raise FamedlyControlError(500, f"Famedly Control API Error: {e}") from e
+        response = await self._request(
+            self.url + "/get_group_members",
+            {"group_id": group_id},
+            GroupMembersResponse,
+        )
+        return [member.external_user_id for member in response.members]
 
     async def get_all_groups_diffs(
         self, sync: str | None, timeout: int = 30
@@ -111,45 +141,23 @@ class FamedlyControlClient:
         Raises:
             FamedlyControlError: If the API returns an error or network failure occurs.
         """
-        uri = self.url + "/get_all_groups_diffs"
-        body: dict = {
-            "timeout": timeout,
-        }
+        body: dict = {"timeout": timeout}
         if sync is not None:
             body["sync"] = sync
-        try:
-            response = await self.http_client.post_json_get_json(
-                uri,
-                body,
-                headers={"Authorization": f"Bearer {self.access_token}"},
-            )
-            if "Ok" in response:
-                return ManyGroupsDiffResponse.model_validate(response["Ok"])
-            elif "Err" in response:
-                error_type = response["Err"].get("type")
-                logger.error("Famedly Control API Error: %s", error_type)
-                raise FamedlyControlError(
-                    500, f"Famedly Control API Error: {error_type}"
-                )
-            else:
-                logger.error("Famedly Control API Error: %s", response)
-                raise FamedlyControlError(
-                    500, f"Unexpected response format: {response}"
-                )
-        except FamedlyControlError:
-            raise
-        except Exception as e:
-            logger.error("Famedly Control API Error: %s", e)
-            raise FamedlyControlError(500, f"Famedly Control API Error: {e}") from e
+        return await self._request(
+            self.url + "/get_all_groups_diffs",
+            body,
+            ManyGroupsDiffResponse,
+        )
 
 
 class FamedlyControlError(SynapseError):
     """Base exception for FamedlyControl API errors."""
 
-    code = 500
+    code = HTTPStatus.INTERNAL_SERVER_ERROR
     msg = "An error occurred with the Famedly Control API"
 
-    def __init__(self, code: int | None = None, msg: str | None = None):
+    def __init__(self, code: HTTPStatus | None = None, msg: str | None = None):
         self.msg = msg or self.__class__.msg
         self.code = code or self.__class__.code
         super().__init__(self.code, self.msg)
