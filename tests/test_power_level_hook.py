@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock, patch
 
 import parameterized
 from synapse.api.constants import CREATOR_POWER_LEVEL, EventTypes
+from synapse.api.room_versions import KNOWN_ROOM_VERSIONS
 from synapse.server import HomeServer
 from synapse.util.clock import Clock
 from twisted.internet.testing import MemoryReactor
@@ -90,6 +91,37 @@ class TestPowerLevelHook(ModuleApiTestCase):
         pl = self._get_power_levels(room_id)
 
         pl["users_default"] = CREATOR_POWER_LEVEL
+        self._set_power_levels(room_id, pl, expect_code=HTTPStatus.FORBIDDEN)
+
+    def test_reject_users_default_greater_or_equal_to_state_default(self) -> None:
+        """Setting users_default at or above state_default should be rejected."""
+        room_id = self._create_managed_room()
+        pl = self._get_power_levels(room_id)
+
+        # First try "at"
+        pl["users_default"] = pl["state_default"]
+        self._set_power_levels(room_id, pl, expect_code=HTTPStatus.FORBIDDEN)
+
+        # Then try "above"
+        pl["users_default"] = pl["state_default"] + 1
+        self._set_power_levels(room_id, pl, expect_code=HTTPStatus.FORBIDDEN)
+
+    @parameterized.parameterized.expand([("ban",), ("kick",), ("invite",)])
+    def test_reject_power_level_equal_to_admin(self, action_level: str) -> None:
+        """Setting specific action PL at or above admin user's PL should be rejected."""
+        room_version = KNOWN_ROOM_VERSIONS.get(self.room_version)
+        # Room versions above "12" have a creator power level at "infinite", which is
+        # not modeled as a value in JSON explicitly. Since that value can not be set,
+        # that means it also can not be tested. Skip the test in this case, as it would
+        # probably raise a 400 instead
+        if room_version.msc4289_creator_power_enabled:
+            self.skipTest("Infinite power level not supported as JSON value")
+
+        room_id = self._create_managed_room()
+        pl = self._get_power_levels(room_id)
+
+        # pl["users"][self.non_admin] = 50
+        pl[action_level] = CREATOR_POWER_LEVEL
         self._set_power_levels(room_id, pl, expect_code=HTTPStatus.FORBIDDEN)
 
     def test_reject_ban_level_below_non_admin(self) -> None:

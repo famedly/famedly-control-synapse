@@ -5,9 +5,12 @@ from synapse import event_auth
 from synapse.api.constants import (
     CREATOR_POWER_LEVEL,
     EventTypes,
+    GuestAccess,
+    Membership,
 )
 from synapse.api.errors import Codes, SynapseError
 from synapse.server import HomeServer
+from synapse.types import JsonDict
 from synapse.types.state import StateFilter
 from synapse.util.clock import Clock
 from twisted.internet.testing import MemoryReactor
@@ -367,6 +370,88 @@ class TestManagedRoomCreation(ModuleApiTestCase):
         )
 
         assert channel.code == HTTPStatus.NOT_FOUND, channel.result
+
+    def room_config_custom(
+        self,
+        room_version: str,
+        creation_content: JsonDict | None = None,
+        initial_state: list[JsonDict] | None = None,
+    ) -> JsonDict:
+        config_model = CreateManagedRoomRequest(
+            room_alias_name="test_room_alias",
+            name="Test Room",
+            room_version=room_version,
+            topic="This is a test room",
+            groups=["test_group"],
+        )
+        config = config_model.model_dump()
+
+        creation_content_dumped = CreationContent().model_dump()
+        if creation_content:
+            creation_content_dumped.update(**creation_content)
+
+        if initial_state:
+            config["initial_state"] = initial_state
+
+        config["creation_content"] = creation_content_dumped
+        return config
+
+    def test_room_creation_fails_with_invalid_initial_state(
+        self, mock_batch_convert, mock_get_group_members
+    ) -> None:
+        """
+        Test edge cases involving `initial_state` included in the room creation request.
+        Specifically do not use the Pydantic models for this, as the model will not pass
+        validation during construction. This is to test the handling of that failed
+        validation by the endpoint.
+        """
+
+        custom_room_config = self.room_config_custom(
+            "10",
+            initial_state=[
+                {
+                    "type": EventTypes.JoinRules,
+                    "state_key": "",
+                    "content": {"join_rule": Membership.JOIN},
+                },
+            ],
+        )
+
+        channel = self.make_request(
+            method="POST",
+            path=self.CREATE_PATH,
+            content=custom_room_config,
+            access_token=self.creator_access_token,
+            shorthand=False,
+        )
+        assert channel.code == HTTPStatus.BAD_REQUEST, channel.result
+        assert (
+            "Invalid request body" in channel.json_body["error"]
+        ), "Response should contain an error message"
+
+        custom_room_config = self.room_config_custom(
+            "10",
+            initial_state=[
+                {
+                    "type": EventTypes.GuestAccess,
+                    "state_key": "",
+                    "content": {"guest_access": GuestAccess.CAN_JOIN},
+                },
+            ],
+        )
+
+        channel = self.make_request(
+            method="POST",
+            path=self.CREATE_PATH,
+            content=custom_room_config,
+            access_token=self.creator_access_token,
+            shorthand=False,
+        )
+
+        assert channel.code == HTTPStatus.BAD_REQUEST, channel.result
+        assert (
+            "Invalid request body" in channel.json_body["error"]
+        ), "Response should contain an error message"
 
 
 @patch(
