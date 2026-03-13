@@ -1,7 +1,7 @@
 from http import HTTPStatus
 from unittest.mock import AsyncMock, patch
 
-from parameterized import parameterized_class
+from parameterized import parameterized, parameterized_class
 from synapse import event_auth
 from synapse.api.constants import (
     CREATOR_POWER_LEVEL,
@@ -207,6 +207,31 @@ class TestManagedRoomCreation(ModuleApiTestCase):
         # Check the invited user's power level
         invitee_pl = event_auth.get_user_power_level(self.invitee, state_map)
         assert invitee_pl == 1, "Invitee should have power level 1"
+
+    @parameterized.expand([("invite",), ("ban",), ("kick",)])
+    def test_membership_action_powerlevel_cannot_be_circumvented(
+        self, mock_get_group_members, membership_action: str
+    ) -> None:
+        """Test that membership action powerlevels can not be overridden"""
+        mock_get_group_members.return_value = [
+            self.invitee
+        ]  # in real case this should be external_ids
+
+        room_config = self.room_config()
+        assert "power_level_content_override" in room_config
+        # Adjust the specific action level we want to test. This is not supposed to be
+        # allowed to change
+        room_config["power_level_content_override"][membership_action] = 10
+
+        channel = self.make_request(
+            method="POST",
+            path=self.CREATE_PATH,
+            content=room_config,
+            access_token=self.creator_access_token,
+            shorthand=False,
+        )
+        # Should error with 400 Bad Request
+        assert channel.code == HTTPStatus.BAD_REQUEST, channel.result
 
     def test_room_created_with_members_joined(self, mock_get_group_members) -> None:
         """Tests that the users of the groups are joined to the room after creation"""

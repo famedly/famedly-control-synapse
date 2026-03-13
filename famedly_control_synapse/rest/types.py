@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic_core.core_schema import ValidationInfo
 from synapse.api.constants import (
     CREATOR_POWER_LEVEL,
@@ -9,6 +9,7 @@ from synapse.api.constants import (
     Membership,
 )
 from synapse.types import JsonDict
+from typing_extensions import Self
 
 MANAGED_ROOM_TYPE = "de.famedly.managedRoom"
 SYNC_TOKEN_TYPE = "de.famedly.roomControl.lastSyncToken.v1"
@@ -35,6 +36,8 @@ class CreationContent(BaseModel):
 class PowerLevelEventContent(BaseModel):
     """Power level event content for overriding default power levels."""
 
+    # A full model validator is below to verify that membership action power levels can
+    # not be overridden
     ban: int = CREATOR_POWER_LEVEL - 1
     events: dict[str, int] = Field(
         default_factory=lambda: {
@@ -54,6 +57,19 @@ class PowerLevelEventContent(BaseModel):
     users: dict[str, int] = Field(default_factory=dict)
     users_default: int = 0
     notifications: dict[str, int] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_membership_actions(self) -> Self:
+        """
+        Ensure that the membership action power levels can not be overridden
+        """
+        for action in ("ban", "invite", "kick"):
+            action_value = getattr(self, action)
+            if action_value < CREATOR_POWER_LEVEL - 1:
+                raise ValueError(
+                    f"Membership action('{action}') power level can not be overridden"
+                )
+        return self
 
 
 class CreateManagedRoomRequest(BaseModel):
