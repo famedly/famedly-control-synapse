@@ -33,12 +33,20 @@ class CreationContent(BaseModel):
     model_config = ConfigDict(validate_by_name=True, validate_by_alias=True)
 
 
+PROTECTED_EVENT_TYPES = {
+    EventTypes.PowerLevels: CREATOR_POWER_LEVEL - 1,
+    EventTypes.JoinRules: CREATOR_POWER_LEVEL - 1,
+    EventTypes.GuestAccess: CREATOR_POWER_LEVEL - 1,
+}
+
+
 class PowerLevelEventContent(BaseModel):
     """Power level event content for overriding default power levels."""
 
     # A full model validator is below to verify that membership action power levels can
     # not be overridden
     ban: int = CREATOR_POWER_LEVEL - 1
+    # events has a validator below
     events: dict[str, int] = Field(
         default_factory=lambda: {
             EventTypes.Name: 100,
@@ -57,6 +65,23 @@ class PowerLevelEventContent(BaseModel):
     users: dict[str, int] = Field(default_factory=dict)
     users_default: int = 0
     notifications: dict[str, int] = Field(default_factory=dict)
+
+    @field_validator("events")
+    @classmethod
+    def validate_events(cls, v: dict[str, int], info: ValidationInfo) -> dict[str, int]:
+        """
+        Ensure that certain event types can not have their power level overridden
+        """
+        for event_type, power_level in v.items():
+            # First check for the specific event types that are not allowed to be
+            # changed away from the room creator
+            if immutable_power_level := PROTECTED_EVENT_TYPES.get(event_type):
+                if power_level != immutable_power_level:
+                    # This will return a 400 on the room creation endpoint
+                    raise ValueError(
+                        f"Changing power_level of '{event_type}' in {info.field_name} is forbidden!"
+                    )
+        return v
 
     @model_validator(mode="after")
     def validate_membership_actions(self) -> Self:

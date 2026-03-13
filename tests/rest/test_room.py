@@ -233,6 +233,34 @@ class TestManagedRoomCreation(ModuleApiTestCase):
         # Should error with 400 Bad Request
         assert channel.code == HTTPStatus.BAD_REQUEST, channel.result
 
+    @parameterized.expand(
+        [(EventTypes.PowerLevels,), (EventTypes.JoinRules,), (EventTypes.GuestAccess,)]
+    )
+    def test_event_type_powerlevel_cannot_be_circumvented(
+        self, mock_get_group_members, event_type: str
+    ) -> None:
+        """Test that membership action powerlevels can not be overridden"""
+        mock_get_group_members.return_value = [
+            self.invitee
+        ]  # in real case this should be external_ids
+
+        room_config = self.room_config()
+        assert "power_level_content_override" in room_config
+        # Adjust the specific action level we want to test. This is not supposed to be
+        # allowed to change
+        assert "events" in room_config["power_level_content_override"]
+        room_config["power_level_content_override"]["events"][event_type] = 10
+
+        channel = self.make_request(
+            method="POST",
+            path=self.CREATE_PATH,
+            content=room_config,
+            access_token=self.creator_access_token,
+            shorthand=False,
+        )
+        # Should be a 400 Bad Request
+        assert channel.code == HTTPStatus.BAD_REQUEST, channel.result
+
     def test_room_created_with_members_joined(self, mock_get_group_members) -> None:
         """Tests that the users of the groups are joined to the room after creation"""
         test_group = "test_group_1"
