@@ -760,7 +760,7 @@ class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
 
         # Try to update groups with the client raising an error
         mock_get_group_members.side_effect = FamedlyControlError(
-            500, "Service unavailable"
+            HTTPStatus.INTERNAL_SERVER_ERROR, "Service unavailable"
         )
         channel = self.make_request(
             method="POST",
@@ -845,9 +845,13 @@ class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
             sender, target, room_id, new_membership, **kwargs
         ):
             if target == test_member_1:
-                raise SynapseError(500, "Unexpected error", Codes.UNKNOWN)
+                raise SynapseError(
+                    HTTPStatus.INTERNAL_SERVER_ERROR, "Unexpected error", Codes.UNKNOWN
+                )
             elif target == test_member_2:
-                raise SynapseError(401, "Permission denied", Codes.UNAUTHORIZED)
+                raise SynapseError(
+                    HTTPStatus.UNAUTHORIZED, "Permission denied", Codes.UNAUTHORIZED
+                )
             return None
 
         with patch(
