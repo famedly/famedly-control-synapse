@@ -100,6 +100,8 @@ class FamedlyControl:
         """Third-party rules callback that enforces membership and power level
         restrictions for managed rooms.
         """
+        # Because of the check for a managed room, this function does not run when
+        # creating a room. A room can not be marked as managed until after its creation.
         if event.type not in (EventTypes.Member, EventTypes.PowerLevels):
             return True, None
 
