@@ -208,3 +208,27 @@ class TestCreateManagedRoomRequest(TestCase):
         # v10, this is added at the time of the request being processed. There should be
         # only the one we asked for
         assert len(req.power_level_content_override.users) == 1
+
+    def test_not_adding_context_to_object_raises(self) -> None:
+        """
+        Test that not including the correct context for model validation causes failure
+        """
+        room_config = {
+            "room_alias_name": "testroom",
+            "name": "Test Room",
+            "power_level_content_override": {"users": {"@alice:example.com": 100}},
+            "groups": ["testgroup"],
+        }
+
+        # Note that the context is not added here. That data is needed to validate that
+        # any users in the `user` override are not the room creator and should not be
+        # skipped during power level validation
+        with pytest.raises(ValidationError):
+            CreateManagedRoomRequest.model_validate(room_config)
+
+        # Also test that the wrong kind of object is not expected. It must be a dict
+        # format
+        with pytest.raises(ValidationError):
+            CreateManagedRoomRequest.model_validate(
+                room_config, context=["@room_creator:example.com"]
+            )
