@@ -1,9 +1,15 @@
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic_core.core_schema import ValidationInfo
-from synapse.api.constants import EventTypes, GuestAccess, Membership
+from synapse.api.constants import (
+    CREATOR_POWER_LEVEL,
+    EventTypes,
+    GuestAccess,
+    Membership,
+)
 from synapse.types import JsonDict
+from typing_extensions import Self
 
 MANAGED_ROOM_TYPE = "de.famedly.managedRoom"
 SYNC_TOKEN_TYPE = "de.famedly.roomControl.lastSyncToken.v1"
@@ -27,28 +33,98 @@ class CreationContent(BaseModel):
     model_config = ConfigDict(validate_by_name=True, validate_by_alias=True)
 
 
+PROTECTED_EVENT_TYPES = {
+    EventTypes.PowerLevels: CREATOR_POWER_LEVEL - 1,
+    EventTypes.JoinRules: CREATOR_POWER_LEVEL - 1,
+    EventTypes.GuestAccess: CREATOR_POWER_LEVEL - 1,
+}
+
+
 class PowerLevelEventContent(BaseModel):
     """Power level event content for overriding default power levels."""
 
-    ban: int = 100
+    # A full model validator is below to verify that membership action power levels can
+    # not be overridden
+    ban: int = CREATOR_POWER_LEVEL - 1
+    # events has a validator below
     events: dict[str, int] = Field(
         default_factory=lambda: {
             EventTypes.Name: 100,
             EventTypes.Topic: 100,
-            EventTypes.PowerLevels: 100,
-            EventTypes.JoinRules: 100,
+            EventTypes.PowerLevels: CREATOR_POWER_LEVEL - 1,
+            EventTypes.JoinRules: CREATOR_POWER_LEVEL - 1,
+            EventTypes.GuestAccess: CREATOR_POWER_LEVEL - 1,
             EventTypes.CanonicalAlias: 100,
             EventTypes.RoomAvatar: 100,
         }
     )
     events_default: int = 0
-    invite: int = 100
-    kick: int = 100
+    invite: int = CREATOR_POWER_LEVEL - 1
+    kick: int = CREATOR_POWER_LEVEL - 1
     redact: int = 100
     state_default: int = 100
+    # users has a validator below
     users: dict[str, int] = Field(default_factory=dict)
     users_default: int = 0
     notifications: dict[str, int] = Field(default_factory=dict)
+
+    @field_validator("events")
+    @classmethod
+    def validate_events(cls, v: dict[str, int], info: ValidationInfo) -> dict[str, int]:
+        """
+        Ensure that certain event types can not have their power level overridden
+        """
+        for event_type, power_level in v.items():
+            # First check for the specific event types that are not allowed to be
+            # changed away from the room creator
+            if event_type in PROTECTED_EVENT_TYPES:
+                immutable_power_level = PROTECTED_EVENT_TYPES.get(event_type)
+                if power_level != immutable_power_level:
+                    # This will return a 400 on the room creation endpoint
+                    raise ValueError(
+                        f"Changing power_level of '{event_type}' in {info.field_name} is forbidden!"
+                    )
+        return v
+
+    @field_validator("users")
+    @classmethod
+    def validate_users(cls, v: dict[str, int], info: ValidationInfo) -> dict[str, int]:
+        """
+        Ensure that any user that is not the room creator is not allowed to have the
+        same power level as the room creator
+        """
+        # The context object is of type ContextT(and appears to be a proxy object type),
+        # but only if it was passed into the model validation.
+        if not isinstance(info.context, dict):
+            raise ValueError(
+                "Context should be passed into the model validation in the form of a dict"
+            )
+
+        room_creator: str | None = info.context.get("room_creator")
+        if not room_creator:
+            raise ValueError(
+                "Room creator key was found in context, but not a usable value"
+            )
+
+        for user, power_level in v.items():
+            if user != room_creator and power_level == CREATOR_POWER_LEVEL - 1:
+                raise ValueError(
+                    "Can not have a user with that high a power level, only the room creator"
+                )
+        return v
+
+    @model_validator(mode="after")
+    def validate_membership_actions(self) -> Self:
+        """
+        Ensure that the membership action power levels can not be overridden
+        """
+        for action in ("ban", "invite", "kick"):
+            action_value = getattr(self, action)
+            if action_value != CREATOR_POWER_LEVEL - 1:
+                raise ValueError(
+                    f"Membership action('{action}') power level can not be overridden"
+                )
+        return self
 
 
 class CreateManagedRoomRequest(BaseModel):

@@ -1,5 +1,9 @@
+from unittest import TestCase
+
 import pytest
+from parameterized import parameterized
 from pydantic import ValidationError
+from synapse.api.constants import CREATOR_POWER_LEVEL, EventTypes
 
 from famedly_control_synapse.rest.types import (
     CreateManagedRoomRequest,
@@ -9,11 +13,11 @@ from famedly_control_synapse.rest.types import (
 
 
 class TestCreationContent:
-    def test_valid_creator_for_v10(self):
+    def test_valid_creator_for_v10(self) -> None:
         content = CreationContent(creator="@alice:example.com")
         assert content.creator == "@alice:example.com"
 
-    def test_m_federate_always_false(self):
+    def test_m_federate_always_false(self) -> None:
         content = CreationContent()
         assert content.m_federate is False
 
@@ -22,48 +26,64 @@ class TestCreationContent:
 
 
 class TestPowerLevelEventContent:
-    def test_valid_power_level_event_content(self):
-        plc = PowerLevelEventContent(
-            users={"@alice:example.com": 100, "@bob:example.com": 50}, users_default=0
+    def test_valid_power_level_event_content(self) -> None:
+        json_dict: dict = {
+            "users": {"@alice:example.com": 100, "@bob:example.com": 50},
+            "users_default": 0,
+        }
+        plc = PowerLevelEventContent.model_validate(
+            json_dict, context={"room_creator": "@room_creator:example.com"}
         )
         assert plc.users["@alice:example.com"] == 100
         assert plc.users["@bob:example.com"] == 50
         assert plc.users_default == 0
 
-    def test_invalid_users_type(self):
+    def test_invalid_users_type(self) -> None:
+        json_dict: dict = {
+            "users": ["@alice:example.com", "@bob:example.com"],
+            "users_default": 0,
+        }
+
         with pytest.raises(ValidationError):
-            PowerLevelEventContent(
-                users=["@alice:example.com", "@bob:example.com"], users_default=0
+            PowerLevelEventContent.model_validate(
+                json_dict, context={"room_creator": "@room_creator:example.com"}
             )
 
 
-class TestCreateManagedRoomRequest:
-    def test_create_managed_room_v10_request_valid(self):
-        # Valid request
-        req = CreateManagedRoomRequest(
-            room_alias_name="testroom",
-            name="Test Room",
-            room_version="10",
-            creation_content=CreationContent(creator="@alice:example.com"),
-            power_level_content_override=PowerLevelEventContent(
-                users={"@alice:example.com": 100}, users_default=0
-            ),
-            groups=["testgroup"],
-        )
-        assert req.room_alias_name == "testroom"
-        assert req.creation_content.creator == "@alice:example.com"
+class TestCreateManagedRoomRequest(TestCase):
+    """
+    Exercise the various options in the shape of the CreateManagedRoomRequest, to make
+    sure it behaves as expected.
 
-    def test_create_managed_room_request_valid(self):
-        # Valid request
-        req = CreateManagedRoomRequest(
-            room_alias_name="testroom",
-            name="Test Room",
-            room_version="12",
-            creation_content=CreationContent(),
-            power_level_content_override=PowerLevelEventContent(),
-            groups=["testgroup"],
+    As notes:
+        * It is not expected here that the creation_content.creator field is filled in, as
+        this is overridden by Synapse at the time of room creation.
+        * While testing that a room version is passed in and in the correct places, the
+        default behavior is to use the default room version defined by the server, so it
+        is None here and filled in during the request
+    """
+
+    @parameterized.expand([("10",), ("12",)])
+    def test_default(self, room_version) -> None:
+        """
+        Test that a basic object is created with expected parameters
+        """
+        json_dict = {
+            "room_alias_name": "testroom",
+            "name": "Test Room",
+            "room_version": room_version,
+            "groups": ["testgroup"],
+        }
+
+        req = CreateManagedRoomRequest.model_validate(
+            json_dict, context={"room_creator": "@room_creator:example.com"}
         )
         assert req.room_alias_name == "testroom"
+        assert req.name == "Test Room"
+        assert req.room_version == room_version
+        # This does not need to exist here. It will be overridden during the room
+        # creation, so is not needed
+        assert req.creation_content.room_version is None
         assert req.creation_content.creator is None
         assert req.initial_state == [
             {
@@ -83,3 +103,132 @@ class TestCreateManagedRoomRequest:
         ]
         assert req.is_direct is False
         assert req.visibility == "private"
+        # At the time this object is created, the room creator is not present in room
+        # v10, this is added at the time of the request being processed. Users should be
+        # empty
+        assert len(req.power_level_content_override.users) == 0
+        # By default, 6 event types are included in the events object
+        self.assertDictEqual(
+            req.power_level_content_override.events,
+            {
+                EventTypes.Name: 100,
+                EventTypes.Topic: 100,
+                EventTypes.PowerLevels: CREATOR_POWER_LEVEL - 1,
+                EventTypes.JoinRules: CREATOR_POWER_LEVEL - 1,
+                EventTypes.GuestAccess: CREATOR_POWER_LEVEL - 1,
+                EventTypes.CanonicalAlias: 100,
+                EventTypes.RoomAvatar: 100,
+            },
+        )
+        assert req.power_level_content_override.ban == CREATOR_POWER_LEVEL - 1
+        assert req.power_level_content_override.invite == CREATOR_POWER_LEVEL - 1
+        assert req.power_level_content_override.kick == CREATOR_POWER_LEVEL - 1
+        assert req.power_level_content_override.redact == 100
+        assert req.power_level_content_override.events_default == 0
+        assert req.power_level_content_override.users_default == 0
+        assert req.power_level_content_override.state_default == 100
+
+        # A single group was requested, make sure it is there
+        assert "testgroup" in req.groups
+        assert len(req.groups) == 1
+
+    def test_with_none_powerlevel(self) -> None:
+        """
+        Test passing a None as the powerlevel override is prohibited
+        """
+        # Then try by setting as None. Expect a ValidationError
+        room_config = {
+            "room_alias_name": "testroom",
+            "name": "Test Room",
+            "power_level_content_override": None,
+            "groups": ["testgroup"],
+        }
+
+        with pytest.raises(ValidationError):
+            CreateManagedRoomRequest.model_validate(
+                room_config, context={"room_creator": "@room_creator:example.com"}
+            )
+
+    def test_with_empty_powerlevel(self) -> None:
+        """
+        Test that adding an empty power level object does not allow circumventing all
+        power levels
+        """
+        # First try with an empty dict, should still get the defaults
+        room_config = {
+            "room_alias_name": "testroom",
+            "name": "Test Room",
+            "power_level_content_override": {},
+            "groups": [],
+        }
+
+        req = CreateManagedRoomRequest.model_validate(
+            room_config, context={"room_creator": "@room_creator:example.com"}
+        )
+        assert len(req.power_level_content_override.users) == 0
+        # By default, 6 event types are included in the events object
+        self.assertDictEqual(
+            req.power_level_content_override.events,
+            {
+                EventTypes.Name: 100,
+                EventTypes.Topic: 100,
+                EventTypes.PowerLevels: CREATOR_POWER_LEVEL - 1,
+                EventTypes.JoinRules: CREATOR_POWER_LEVEL - 1,
+                EventTypes.GuestAccess: CREATOR_POWER_LEVEL - 1,
+                EventTypes.CanonicalAlias: 100,
+                EventTypes.RoomAvatar: 100,
+            },
+        )
+        assert req.power_level_content_override.ban == CREATOR_POWER_LEVEL - 1
+        assert req.power_level_content_override.invite == CREATOR_POWER_LEVEL - 1
+        assert req.power_level_content_override.kick == CREATOR_POWER_LEVEL - 1
+        assert req.power_level_content_override.redact == 100
+        assert req.power_level_content_override.events_default == 0
+        assert req.power_level_content_override.users_default == 0
+        assert req.power_level_content_override.state_default == 100
+
+    def test_with_user_powerlevel_override(self) -> None:
+        """
+        Test that adding a user override power level operates as expected
+        """
+        room_config = {
+            "room_alias_name": "testroom",
+            "name": "Test Room",
+            "power_level_content_override": {"users": {"@alice:example.com": 100}},
+            "groups": ["testgroup"],
+        }
+
+        req = CreateManagedRoomRequest.model_validate(
+            room_config, context={"room_creator": "@room_creator:example.com"}
+        )
+        assert req.power_level_content_override.users_default == 0
+        assert "@alice:example.com" in req.power_level_content_override.users
+        assert req.power_level_content_override.users["@alice:example.com"] == 100
+        # At the time this object is created, the room creator is not present in room
+        # v10, this is added at the time of the request being processed. There should be
+        # only the one we asked for
+        assert len(req.power_level_content_override.users) == 1
+
+    def test_not_adding_context_to_object_raises(self) -> None:
+        """
+        Test that not including the correct context for model validation causes failure
+        """
+        room_config = {
+            "room_alias_name": "testroom",
+            "name": "Test Room",
+            "power_level_content_override": {"users": {"@alice:example.com": 100}},
+            "groups": ["testgroup"],
+        }
+
+        # Note that the context is not added here. That data is needed to validate that
+        # any users in the `user` override are not the room creator and should not be
+        # skipped during power level validation
+        with pytest.raises(ValidationError):
+            CreateManagedRoomRequest.model_validate(room_config)
+
+        # Also test that the wrong kind of object is not expected. It must be a dict
+        # format
+        with pytest.raises(ValidationError):
+            CreateManagedRoomRequest.model_validate(
+                room_config, context=["@room_creator:example.com"]
+            )
