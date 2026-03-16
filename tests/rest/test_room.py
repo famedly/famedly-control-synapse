@@ -420,6 +420,28 @@ class TestManagedRoomCreation(ModuleApiTestCase):
             "Invalid request body" in channel.json_body["error"]
         ), "Response should contain an error message"
 
+        custom_room_config = self.room_config_custom(
+            initial_state=[
+                {
+                    "type": EventTypes.PowerLevels,
+                    "state_key": "",
+                    "content": {"invite": 10},
+                },
+            ],
+        )
+
+        channel = self.make_request(
+            method="POST",
+            path=self.CREATE_PATH,
+            content=custom_room_config,
+            access_token=self.creator_access_token,
+            shorthand=False,
+        )
+
+        # Passing in a power level event to initial_state with invalid content should
+        # not be allowed
+        assert channel.code == HTTPStatus.BAD_REQUEST, channel.result
+
 
 @patch(
     "famedly_control_synapse.client.FamedlyControlClient.get_group_members",

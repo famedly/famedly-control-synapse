@@ -187,6 +187,10 @@ class CreateManagedRoomRequest(BaseModel):
                     raise ValueError(
                         f"{info.field_name} contains guest_access that is not 'forbidden'"
                     )
+            if state_dict.get("type") == EventTypes.PowerLevels:
+                PowerLevelEventContent.model_validate(
+                    state_dict.get("content"), context=info.context
+                )
         return v
 
 
