@@ -62,6 +62,7 @@ class PowerLevelEventContent(BaseModel):
     kick: int = CREATOR_POWER_LEVEL - 1
     redact: int = 100
     state_default: int = 100
+    # users has a validator below
     users: dict[str, int] = Field(default_factory=dict)
     users_default: int = 0
     notifications: dict[str, int] = Field(default_factory=dict)
@@ -80,6 +81,26 @@ class PowerLevelEventContent(BaseModel):
                     # This will return a 400 on the room creation endpoint
                     raise ValueError(
                         f"Changing power_level of '{event_type}' in {info.field_name} is forbidden!"
+                    )
+        return v
+
+    @field_validator("users")
+    @classmethod
+    def validate_users(cls, v: dict[str, int], info: ValidationInfo) -> dict[str, int]:
+        """
+        Ensure that any user that is not the room creator is not allowed to have the
+        same power level as the room creator
+        """
+        if isinstance(info.context, dict):
+            room_creator: str | None = info.context.get("room_creator")
+            assert (
+                room_creator is not None
+            ), "Room creator context not passed in to model validation"
+
+            for user, power_level in v.items():
+                if user != room_creator and power_level == CREATOR_POWER_LEVEL - 1:
+                    raise ValueError(
+                        "Can not have a user with that high a power level, only the room creator"
                     )
         return v
 

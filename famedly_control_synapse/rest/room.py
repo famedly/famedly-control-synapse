@@ -76,7 +76,9 @@ class CreateManagedRoomResource(RestServlet):
                 room_config["room_version"] = (
                     self.api._hs.config.server.default_room_version.identifier
                 )
-            validated_room_config = CreateManagedRoomRequest.model_validate(room_config)
+            validated_room_config = CreateManagedRoomRequest.model_validate(
+                room_config, context={"room_creator": admin_user_id}
+            )
         except ValidationError as e:
             validation_error = [
                 {"loc": err.get("loc"), "msg": err.get("msg")} for err in e.errors()

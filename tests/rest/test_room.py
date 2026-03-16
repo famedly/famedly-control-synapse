@@ -208,6 +208,29 @@ class TestManagedRoomCreation(ModuleApiTestCase):
         invitee_pl = event_auth.get_user_power_level(self.invitee, state_map)
         assert invitee_pl == 1, "Invitee should have power level 1"
 
+    def test_user_powerlevel_override_at_critical_level_forbidden(
+        self, mock_get_group_members
+    ) -> None:
+        """Test that a user powerlevel override is not honored when set too high"""
+        mock_get_group_members.return_value = [
+            self.invitee
+        ]  # in real case this should be external_ids
+        room_config = self.room_config()
+        power_level_content_override = room_config.setdefault(
+            "power_level_content_override", {}
+        )
+        users = power_level_content_override.setdefault("users", {})
+        users.setdefault(self.invitee, CREATOR_POWER_LEVEL - 1)
+        channel = self.make_request(
+            method="POST",
+            path=self.CREATE_PATH,
+            content=room_config,
+            access_token=self.creator_access_token,
+            shorthand=False,
+        )
+        # Should error with a 400 Bad Request
+        assert channel.code == HTTPStatus.BAD_REQUEST, channel.result
+
     @parameterized.expand([("invite",), ("ban",), ("kick",)])
     def test_membership_action_powerlevel_cannot_be_circumvented(
         self, mock_get_group_members, membership_action: str
