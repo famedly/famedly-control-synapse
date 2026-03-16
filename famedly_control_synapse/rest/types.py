@@ -112,6 +112,8 @@ class PowerLevelEventContent(BaseModel):
                 raise ValueError(
                     "Can not have a user with that high a power level, only the room creator"
                 )
+            if user == room_creator and power_level != CREATOR_POWER_LEVEL - 1:
+                raise ValueError("Can not change the room creator's power level")
         return v
 
     @model_validator(mode="after")
