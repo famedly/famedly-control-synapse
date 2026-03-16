@@ -259,3 +259,9 @@ class TestCreateManagedRoomRequest(TestCase):
             CreateManagedRoomRequest.model_validate(
                 room_config, context=["@room_creator:example.com"]
             )
+
+        # Also test that "room_creator" being None is not allowed
+        with pytest.raises(ValidationError):
+            CreateManagedRoomRequest.model_validate(
+                room_config, context={"room_creator": None}
+            )
