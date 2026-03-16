@@ -214,6 +214,36 @@ class TestCreateManagedRoomRequest(TestCase):
         assert req.power_level_content_override.users_default == 0
         assert req.power_level_content_override.state_default == 50
 
+    def test_arbitrary_event_type_override_does_not_skip_defaults(self) -> None:
+        room_config = {
+            "room_alias_name": "testroom",
+            "name": "Test Room",
+            "power_level_content_override": {"events": {EventTypes.Message: 10}},
+            "groups": [],
+        }
+
+        req = CreateManagedRoomRequest.model_validate(
+            room_config, context=["@room_creator:example.com"]
+        )
+        assert len(req.power_level_content_override.users) == 0
+        # By default, 6 event types are included in the events object
+        self.assertDictEqual(
+            req.power_level_content_override.events,
+            {
+                EventTypes.PowerLevels: CREATOR_POWER_LEVEL - 1,
+                EventTypes.JoinRules: CREATOR_POWER_LEVEL - 1,
+                EventTypes.GuestAccess: CREATOR_POWER_LEVEL - 1,
+                EventTypes.Message: 10,
+            },
+        )
+        assert req.power_level_content_override.ban == CREATOR_POWER_LEVEL - 1
+        assert req.power_level_content_override.invite == CREATOR_POWER_LEVEL - 1
+        assert req.power_level_content_override.kick == CREATOR_POWER_LEVEL - 1
+        assert req.power_level_content_override.redact == 50
+        assert req.power_level_content_override.events_default == 0
+        assert req.power_level_content_override.users_default == 0
+        assert req.power_level_content_override.state_default == 50
+
     def test_with_user_powerlevel_override(self) -> None:
         """
         Test that adding a user override power level operates as expected

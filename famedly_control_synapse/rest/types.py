@@ -1,6 +1,7 @@
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic.fields import FieldInfo
 from pydantic_core.core_schema import ValidationInfo
 from synapse.api.constants import (
     CREATOR_POWER_LEVEL,
@@ -115,6 +116,31 @@ class PowerLevelEventContent(BaseModel):
             if user == room_creator and power_level != CREATOR_POWER_LEVEL - 1:
                 raise ValueError("Can not change the room creator's power level")
         return v
+
+    @model_validator(mode="before")
+    @classmethod
+    def merge_events_overrides(cls, data: Any) -> Any:
+        """
+        Allow merging new 'events' overrides into the expected data. This will not do
+        validation
+        """
+        if isinstance(data, dict):
+            # Retrieve the defaults from the default_factory on the 'events' object
+            event_field: FieldInfo = cls.model_fields["events"]
+
+            # mypy thinks that default_factory() here has both too few arguments and
+            # that None is not callable. Neither of these is true
+            default_events_items = event_field.default_factory()  # type: ignore[misc, call-arg]
+
+            if "events" in data and isinstance(data["events"], dict):
+                # Update the defaults with those passed in on creation of this object
+                default_events_items.update(data["events"])
+                # Overwrite those continuing on into the object creation
+                data["events"] = default_events_items
+
+            # if there was no 'events' being asked for, then the normal default_factory
+            # will fill in the defaults for us
+        return data
 
     @model_validator(mode="after")
     def validate_membership_actions(self) -> Self:
