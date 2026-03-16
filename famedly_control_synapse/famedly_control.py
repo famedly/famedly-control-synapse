@@ -15,12 +15,13 @@
 import logging
 from typing import Any
 
+from pydantic import ValidationError
 from synapse.api.constants import EventTypes, Membership
 from synapse.api.errors import Codes, SynapseError
-from synapse.event_auth import get_user_power_level
 from synapse.events import EventBase
 from synapse.http.server import JsonResource
 from synapse.module_api import ModuleApi
+from synapse.state import CREATE_KEY
 from synapse.types import StateMap
 
 from famedly_control_synapse.client import FamedlyControlClient
@@ -32,6 +33,7 @@ from famedly_control_synapse.rest.room import (
     CreateManagedRoomResource,
     ListManagedRoomsResource,
 )
+from famedly_control_synapse.rest.types import PowerLevelEventContent
 from famedly_control_synapse.room_handler import ManagedRoomHandler
 from famedly_control_synapse.sync import GroupMembershipSyncer
 
@@ -152,88 +154,32 @@ class FamedlyControl:
     async def _check_power_levels_allowed(
         self, event: EventBase, state_events: StateMap[EventBase], admin_user: str
     ) -> tuple[bool, dict | None]:
-        """Block invalid power level changes in managed rooms.
+        """Block invalid power level changes in managed rooms. While any system admin
+        can make changes to this event, protect that the levels we consider invariant
+        can not be changed
 
         Enforced constraints:
         * The admin must remain the highest power level in the room.
         * No non-admin user may have a PL >= the admin's PL.
         * ``users_default`` must be strictly below the admin's PL.
         * Non-admin users must stay below sensitive event thresholds
-          (``state_default``, ``m.room.power_levels``).
-        * Membership actions (ban, kick, invite) must not exceed the
-          admin's PL and must be strictly above all non-admin users.
+          (``m.room.join_rules``, ``m.room.power_levels``, ``m.room.guest_access``).
+        * Membership actions (ban, kick, invite) must not ever be lower than the room
+          creator's PL
         """
         new_content = event.content
-        users = new_content.get("users", {})
-        users_default = new_content.get("users_default", 0)
-        # the admin isn't necessarily present in the users list for power level updates
-        # this is the case for rooms >v12
-        current_admin_pl = get_user_power_level(admin_user, state_events)
-        admin_pl = users.get(admin_user, current_admin_pl)
+        room_creator = state_events.get(CREATE_KEY)
+        try:
+            PowerLevelEventContent.model_validate(
+                new_content, context={"room_creator": room_creator.sender}
+            )
+            return True, None
+        except ValidationError as e:
+            err = e.errors()[0]
+            single_validation_error = {"loc": err.get("loc"), "msg": err.get("msg")}
 
-        for user_id, pl in users.items():
-            if user_id != admin_user and pl >= admin_pl:
-                raise SynapseError(
-                    403,
-                    "No user can have a power level equal to or higher than the admin in a managed room",
-                    Codes.FORBIDDEN,
-                )
-
-        if users_default >= admin_pl:
             raise SynapseError(
                 403,
-                "users_default cannot be equal to or higher than the admin power level in a managed room",
-                Codes.FORBIDDEN,
+                f"Invalid request body: {single_validation_error}",
+                errcode=Codes.FORBIDDEN,
             )
-
-        # Prevent non-admin users from reaching sensitive event thresholds.
-        state_default = new_content.get("state_default", 50)
-        events = new_content.get("events", {})
-        power_levels_pl = events.get(EventTypes.PowerLevels, state_default)
-        sensitive_threshold = min(state_default, power_levels_pl)
-
-        max_non_admin_pl = users_default
-
-        for uid, pl in users.items():
-            if uid != admin_user and pl > max_non_admin_pl:
-                max_non_admin_pl = pl
-
-        if users_default >= sensitive_threshold:
-            raise SynapseError(
-                403,
-                "users_default cannot be equal to or above the threshold for sensitive state events in a managed room",
-                Codes.FORBIDDEN,
-            )
-
-        for user_id, pl in users.items():
-            if user_id != admin_user and pl >= sensitive_threshold:
-                raise SynapseError(
-                    403,
-                    "non-admin user power level cannot be equal to or above the threshold for sensitive state events in a managed room",
-                    Codes.FORBIDDEN,
-                )
-
-        # membership actions default to Matrix-spec values when not explicitly set.
-        membership_action_defaults = {
-            "ban": 50,
-            "kick": 50,
-            "invite": 50,
-        }
-        for action, action_default in membership_action_defaults.items():
-            action_pl = new_content.get(action, action_default)
-
-            if action_pl > admin_pl:
-                raise SynapseError(
-                    403,
-                    f"{action} power level cannot exceed admin power level in a managed room",
-                    Codes.FORBIDDEN,
-                )
-
-            if action_pl <= max_non_admin_pl:
-                raise SynapseError(
-                    403,
-                    f"{action} power level must be higher than all non-admin users in a managed room",
-                    Codes.FORBIDDEN,
-                )
-
-        return True, None
