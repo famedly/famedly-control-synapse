@@ -262,7 +262,7 @@ class TestManagedRoomCreation(ModuleApiTestCase):
     def test_event_type_powerlevel_cannot_be_circumvented(
         self, mock_get_group_members, event_type: str
     ) -> None:
-        """Test that membership action powerlevels can not be overridden"""
+        """Test that event type powerlevels can not be overridden"""
         mock_get_group_members.return_value = [
             self.invitee
         ]  # in real case this should be external_ids

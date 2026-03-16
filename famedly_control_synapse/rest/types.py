@@ -53,6 +53,7 @@ class PowerLevelEventContent(BaseModel):
             EventTypes.Topic: 100,
             EventTypes.PowerLevels: CREATOR_POWER_LEVEL - 1,
             EventTypes.JoinRules: CREATOR_POWER_LEVEL - 1,
+            EventTypes.GuestAccess: CREATOR_POWER_LEVEL - 1,
             EventTypes.CanonicalAlias: 100,
             EventTypes.RoomAvatar: 100,
         }
@@ -76,7 +77,8 @@ class PowerLevelEventContent(BaseModel):
         for event_type, power_level in v.items():
             # First check for the specific event types that are not allowed to be
             # changed away from the room creator
-            if immutable_power_level := PROTECTED_EVENT_TYPES.get(event_type):
+            if event_type in PROTECTED_EVENT_TYPES:
+                immutable_power_level = PROTECTED_EVENT_TYPES.get(event_type)
                 if power_level != immutable_power_level:
                     # This will return a 400 on the room creation endpoint
                     raise ValueError(
@@ -91,17 +93,24 @@ class PowerLevelEventContent(BaseModel):
         Ensure that any user that is not the room creator is not allowed to have the
         same power level as the room creator
         """
-        if isinstance(info.context, dict):
-            room_creator: str | None = info.context.get("room_creator")
-            assert (
-                room_creator is not None
-            ), "Room creator context not passed in to model validation"
+        # The context object is of type ContextT(and appears to be a proxy object type),
+        # but only if it was passed into the model validation.
+        if not isinstance(info.context, dict):
+            raise ValueError(
+                "Context should be passed into the model validation in the form of a dict"
+            )
 
-            for user, power_level in v.items():
-                if user != room_creator and power_level == CREATOR_POWER_LEVEL - 1:
-                    raise ValueError(
-                        "Can not have a user with that high a power level, only the room creator"
-                    )
+        room_creator: str | None = info.context.get("room_creator")
+        if not room_creator:
+            raise ValueError(
+                "Room creator key was found in context, but not a usable value"
+            )
+
+        for user, power_level in v.items():
+            if user != room_creator and power_level == CREATOR_POWER_LEVEL - 1:
+                raise ValueError(
+                    "Can not have a user with that high a power level, only the room creator"
+                )
         return v
 
     @model_validator(mode="after")
@@ -111,7 +120,7 @@ class PowerLevelEventContent(BaseModel):
         """
         for action in ("ban", "invite", "kick"):
             action_value = getattr(self, action)
-            if action_value < CREATOR_POWER_LEVEL - 1:
+            if action_value != CREATOR_POWER_LEVEL - 1:
                 raise ValueError(
                     f"Membership action('{action}') power level can not be overridden"
                 )
