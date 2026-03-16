@@ -58,14 +58,19 @@ class PowerLevelEventContent(BaseModel):
             EventTypes.RoomAvatar: 100,
         }
     )
-    events_default: int = 0
+    # Use the `exclude_if` pattern for ensuring that this field is not included if it is
+    # the default per the matrix spec. This allows these defaults to not be included
+    # when serializing this model. Other options included having `exclude_unset` and
+    # `exclude_defaults` from `model_dump()`, but that would mean the fields we override
+    # to also be excluded and that is unwanted.
+    events_default: int = Field(0, exclude_if=lambda x: x == 0)
     invite: int = CREATOR_POWER_LEVEL - 1
     kick: int = CREATOR_POWER_LEVEL - 1
-    redact: int = 100
-    state_default: int = 100
+    redact: int = Field(50, exclude_if=lambda x: x == 50)
+    state_default: int = Field(50, exclude_if=lambda x: x == 50)
     # users has a validator below
     users: dict[str, int] = Field(default_factory=dict)
-    users_default: int = 0
+    users_default: int = Field(0, exclude_if=lambda x: x == 0)
     notifications: dict[str, int] = Field(default_factory=dict)
 
     @field_validator("events")

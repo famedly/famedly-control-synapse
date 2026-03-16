@@ -49,6 +49,41 @@ class TestPowerLevelEventContent:
                 json_dict, context={"room_creator": "@room_creator:example.com"}
             )
 
+    def test_matrix_default_values_are_not_serialized(self) -> None:
+        """
+        Test verify that serializing the power level event does not contain matrix spec
+        defaulted data
+        """
+        # First test that an empty payload is as expected
+        json_dict: dict = {}
+        plc = PowerLevelEventContent.model_validate(json_dict)
+        assert plc.users_default == 0
+        assert plc.ban == CREATOR_POWER_LEVEL - 1
+        dumped_dict = plc.model_dump()
+        # users_default should be None as 0 is it's default
+        assert dumped_dict.get("users_default") is None
+        assert dumped_dict.get("ban") == CREATOR_POWER_LEVEL - 1
+
+        # Then test that explicitly giving a value that is the default still is as expected
+        json_dict = {"users_default": 0}
+        plc = PowerLevelEventContent.model_validate(json_dict)
+        assert plc.users_default == 0
+        assert plc.ban == CREATOR_POWER_LEVEL - 1
+        dumped_dict = plc.model_dump()
+        # users_default should be None as 0 is it's default
+        assert dumped_dict.get("users_default") is None
+        assert dumped_dict.get("ban") == CREATOR_POWER_LEVEL - 1
+
+        # Then test that making the value a non-default is being produced in the result
+        json_dict = {"users_default": 1}
+        plc = PowerLevelEventContent.model_validate(json_dict)
+        assert plc.users_default == 1
+        assert plc.ban == CREATOR_POWER_LEVEL - 1
+        dumped_dict = plc.model_dump()
+        # users_default should be 1 as it is being explicitly defined as a non-default value
+        assert dumped_dict.get("users_default") == 1
+        assert dumped_dict.get("ban") == CREATOR_POWER_LEVEL - 1
+
 
 class TestCreateManagedRoomRequest(TestCase):
     """
@@ -123,10 +158,10 @@ class TestCreateManagedRoomRequest(TestCase):
         assert req.power_level_content_override.ban == CREATOR_POWER_LEVEL - 1
         assert req.power_level_content_override.invite == CREATOR_POWER_LEVEL - 1
         assert req.power_level_content_override.kick == CREATOR_POWER_LEVEL - 1
-        assert req.power_level_content_override.redact == 100
+        assert req.power_level_content_override.redact == 50
         assert req.power_level_content_override.events_default == 0
         assert req.power_level_content_override.users_default == 0
-        assert req.power_level_content_override.state_default == 100
+        assert req.power_level_content_override.state_default == 50
 
         # A single group was requested, make sure it is there
         assert "testgroup" in req.groups
@@ -182,10 +217,10 @@ class TestCreateManagedRoomRequest(TestCase):
         assert req.power_level_content_override.ban == CREATOR_POWER_LEVEL - 1
         assert req.power_level_content_override.invite == CREATOR_POWER_LEVEL - 1
         assert req.power_level_content_override.kick == CREATOR_POWER_LEVEL - 1
-        assert req.power_level_content_override.redact == 100
+        assert req.power_level_content_override.redact == 50
         assert req.power_level_content_override.events_default == 0
         assert req.power_level_content_override.users_default == 0
-        assert req.power_level_content_override.state_default == 100
+        assert req.power_level_content_override.state_default == 50
 
     def test_with_user_powerlevel_override(self) -> None:
         """
