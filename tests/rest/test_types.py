@@ -146,13 +146,9 @@ class TestCreateManagedRoomRequest(TestCase):
         self.assertDictEqual(
             req.power_level_content_override.events,
             {
-                EventTypes.Name: 100,
-                EventTypes.Topic: 100,
                 EventTypes.PowerLevels: CREATOR_POWER_LEVEL - 1,
                 EventTypes.JoinRules: CREATOR_POWER_LEVEL - 1,
                 EventTypes.GuestAccess: CREATOR_POWER_LEVEL - 1,
-                EventTypes.CanonicalAlias: 100,
-                EventTypes.RoomAvatar: 100,
             },
         )
         assert req.power_level_content_override.ban == CREATOR_POWER_LEVEL - 1
@@ -205,13 +201,9 @@ class TestCreateManagedRoomRequest(TestCase):
         self.assertDictEqual(
             req.power_level_content_override.events,
             {
-                EventTypes.Name: 100,
-                EventTypes.Topic: 100,
                 EventTypes.PowerLevels: CREATOR_POWER_LEVEL - 1,
                 EventTypes.JoinRules: CREATOR_POWER_LEVEL - 1,
                 EventTypes.GuestAccess: CREATOR_POWER_LEVEL - 1,
-                EventTypes.CanonicalAlias: 100,
-                EventTypes.RoomAvatar: 100,
             },
         )
         assert req.power_level_content_override.ban == CREATOR_POWER_LEVEL - 1

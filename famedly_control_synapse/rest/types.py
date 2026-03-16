@@ -49,13 +49,9 @@ class PowerLevelEventContent(BaseModel):
     # events has a validator below
     events: dict[str, int] = Field(
         default_factory=lambda: {
-            EventTypes.Name: 100,
-            EventTypes.Topic: 100,
             EventTypes.PowerLevels: CREATOR_POWER_LEVEL - 1,
             EventTypes.JoinRules: CREATOR_POWER_LEVEL - 1,
             EventTypes.GuestAccess: CREATOR_POWER_LEVEL - 1,
-            EventTypes.CanonicalAlias: 100,
-            EventTypes.RoomAvatar: 100,
         }
     )
     # Use the `exclude_if` pattern for ensuring that this field is not included if it is
