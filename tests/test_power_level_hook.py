@@ -3,7 +3,6 @@ from unittest.mock import AsyncMock, patch
 
 import parameterized
 from synapse.api.constants import CREATOR_POWER_LEVEL, EventTypes
-from synapse.api.room_versions import KNOWN_ROOM_VERSIONS
 from synapse.server import HomeServer
 from synapse.util.clock import Clock
 from twisted.internet.testing import MemoryReactor
@@ -14,6 +13,15 @@ from tests.utils.module_api_testcase import ModuleApiTestCase
 
 @parameterized.parameterized_class(("room_version",), [("10",), ("12",)])
 class TestPowerLevelHook(ModuleApiTestCase):
+    """
+    Test that trying to change the invariant power levels of an existing room is:
+    1. Prohibited by a non-room creator admin
+    2. Isn't allowed if any other user is given the same power level of the room creator
+    3. Isn't allowed if any sensitive event types are changed
+    4. Isn't allowed if any membership actions are changed
+    5. Is allowed for normal room administrator behavior (nothing unexpected broke)
+    """
+
     room_version: str
     CREATE_PATH = "/_famedlyControl/v1/managedRooms/createRoom"
 
@@ -69,7 +77,7 @@ class TestPowerLevelHook(ModuleApiTestCase):
         room_id = self._create_managed_room()
         pl = self._get_power_levels(room_id)
 
-        pl["users"][self.non_admin] = CREATOR_POWER_LEVEL
+        pl["users"][self.non_admin] = CREATOR_POWER_LEVEL - 1
         self._set_power_levels(room_id, pl, expect_code=HTTPStatus.FORBIDDEN)
 
     def test_reject_other_user_higher_than_admin(self) -> None:
@@ -77,138 +85,49 @@ class TestPowerLevelHook(ModuleApiTestCase):
         room_id = self._create_managed_room()
         pl = self._get_power_levels(room_id)
 
-        pl["users"][self.non_admin] = CREATOR_POWER_LEVEL + 1
-        self._set_power_levels(room_id, pl, expect_code=HTTPStatus.FORBIDDEN)
+        pl["users"][self.non_admin] = CREATOR_POWER_LEVEL
+        # CREATOR_POWER_LEVEL is non-canonicaljson, so is rejected
+        self._set_power_levels(room_id, pl, expect_code=HTTPStatus.BAD_REQUEST)
 
-    def test_reject_users_default_equal_to_admin(self) -> None:
-        """Setting users_default equal to admin PL should be rejected."""
+    def test_reject_room_creator_cannot_lower_own_power_level(self) -> None:
+        """Setting a room creator's power level too low should be rejected"""
         room_id = self._create_managed_room()
         pl = self._get_power_levels(room_id)
 
-        pl["users_default"] = CREATOR_POWER_LEVEL
-        self._set_power_levels(room_id, pl, expect_code=HTTPStatus.FORBIDDEN)
+        pl["users"][self.creator] = CREATOR_POWER_LEVEL - 2
 
-    def test_reject_users_default_greater_or_equal_to_state_default(self) -> None:
-        """Setting users_default at or above state_default should be rejected."""
-        room_id = self._create_managed_room()
-        pl = self._get_power_levels(room_id)
-
-        # First try "at"
-        pl["users_default"] = pl["state_default"]
-        self._set_power_levels(room_id, pl, expect_code=HTTPStatus.FORBIDDEN)
-
-        # Then try "above"
-        pl["users_default"] = pl["state_default"] + 1
+        # Room versions above "11" do not allow for the room creator to exist in the
+        # power level event's 'users' object, as they will always have an 'infinite'
+        # level. The response there is different for rooms "11" and below. However, the
+        # validation done on the power level event takes place before that check, so
+        # instead of raising a 400 it will be the 403
         self._set_power_levels(room_id, pl, expect_code=HTTPStatus.FORBIDDEN)
 
     @parameterized.parameterized.expand([("ban",), ("kick",), ("invite",)])
-    def test_reject_power_level_equal_to_admin(self, action_level: str) -> None:
-        """Setting specific action PL at or above admin user's PL should be rejected."""
-        room_version = KNOWN_ROOM_VERSIONS.get(self.room_version)
-        # Room versions above "12" have a creator power level at "infinite", which is
-        # not modeled as a value in JSON explicitly. Since that value can not be set,
-        # that means it also can not be tested. Skip the test in this case, as it would
-        # probably raise a 400 instead
-        if room_version.msc4289_creator_power_enabled:
-            self.skipTest("Infinite power level not supported as JSON value")
-
+    def test_membership_action_power_level_equal_to_admin_no_op(
+        self, action_level: str
+    ) -> None:
+        """Setting specific action PL at admin user's PL should be allowed."""
         room_id = self._create_managed_room()
         pl = self._get_power_levels(room_id)
 
-        # pl["users"][self.non_admin] = 50
-        pl[action_level] = CREATOR_POWER_LEVEL
-        self._set_power_levels(room_id, pl, expect_code=HTTPStatus.FORBIDDEN)
-
-    def test_reject_ban_level_below_non_admin(self) -> None:
-        """Setting ban PL at or below a non-admin user's PL should be rejected."""
-        room_id = self._create_managed_room()
-        pl = self._get_power_levels(room_id)
-
-        pl["users"][self.non_admin] = 50
-        pl["ban"] = 50
-        self._set_power_levels(room_id, pl, expect_code=HTTPStatus.FORBIDDEN)
-
-    def test_reject_kick_level_below_non_admin(self) -> None:
-        """Setting kick PL at or below a non-admin user's PL should be rejected."""
-        room_id = self._create_managed_room()
-        pl = self._get_power_levels(room_id)
-
-        pl["users"][self.non_admin] = 50
-        pl["kick"] = 50
-        self._set_power_levels(room_id, pl, expect_code=HTTPStatus.FORBIDDEN)
-
-    def test_reject_invite_level_below_non_admin(self) -> None:
-        """Setting invite PL at or below a non-admin user's PL should be rejected."""
-        room_id = self._create_managed_room()
-        pl = self._get_power_levels(room_id)
-
-        pl["users"][self.non_admin] = 50
-        pl["invite"] = 50
-        self._set_power_levels(room_id, pl, expect_code=HTTPStatus.FORBIDDEN)
-
-    def test_reject_membership_level_below_users_default(self) -> None:
-        """Membership action PLs must be above users_default too."""
-        room_id = self._create_managed_room()
-        pl = self._get_power_levels(room_id)
-
-        pl["users_default"] = 30
-        pl["ban"] = 30
-        self._set_power_levels(room_id, pl, expect_code=HTTPStatus.FORBIDDEN)
-
-    def test_allow_valid_power_level_change(self) -> None:
-        """A valid PL change that maintains all constraints should be allowed."""
-        room_id = self._create_managed_room()
-        pl = self._get_power_levels(room_id)
-
-        pl["users"][self.non_admin] = 10
-        pl["ban"] = 100
-        pl["kick"] = 100
-        pl["invite"] = 100
+        pl[action_level] = CREATOR_POWER_LEVEL - 1
         self._set_power_levels(room_id, pl, expect_code=HTTPStatus.OK)
 
-    def test_allow_membership_levels_above_non_admin(self) -> None:
-        """Membership action PLs strictly above all non-admin users should be allowed."""
+    @parameterized.parameterized.expand([("ban",), ("kick",), ("invite",)])
+    def test_membership_action_power_level_below_admin_rejected(
+        self, action_level: str
+    ) -> None:
+        """Setting specific action PL below admin user's PL should be rejected."""
         room_id = self._create_managed_room()
         pl = self._get_power_levels(room_id)
 
-        pl["users"][self.non_admin] = 50
-        pl["ban"] = 51
-        pl["kick"] = 51
-        pl["invite"] = 51
-        self._set_power_levels(room_id, pl, expect_code=HTTPStatus.OK)
-
-    def test_reject_admin_lower_than_other_user(self) -> None:
-        """Admin lowering their PL below another user should be rejected."""
-        room_id = self._create_managed_room()
-        pl = self._get_power_levels(room_id)
-
-        # First give non_admin a PL, then try to lower admin below it
-        pl["users"][self.non_admin] = 50
-        pl["ban"] = 51
-        pl["kick"] = 51
-        pl["invite"] = 51
-        self._set_power_levels(room_id, pl, expect_code=HTTPStatus.OK)
-
-        pl = self._get_power_levels(room_id)
-        pl["users"][self.creator] = 49
+        pl[action_level] = CREATOR_POWER_LEVEL - 2
         self._set_power_levels(room_id, pl, expect_code=HTTPStatus.FORBIDDEN)
 
-    def test_reject_non_admin_at_sensitive_event_threshold(self) -> None:
-        """Non-admin user with PL >= sensitive event threshold should be rejected,
-        even if ban/kick/invite thresholds are set higher."""
-        room_id = self._create_managed_room()
-        pl = self._get_power_levels(room_id)
-
-        # Set high ban/kick/invite thresholds to attempt bypass
-        pl["ban"] = 1000
-        pl["kick"] = 1000
-        pl["invite"] = 1000
-        # Give non-admin PL that is below membership thresholds but at state_default
-        pl["users"][self.non_admin] = pl.get("state_default", 100)
-        self._set_power_levels(room_id, pl, expect_code=HTTPStatus.FORBIDDEN)
-
-    def test_admin_can_update_power_levels(self) -> None:
+    def test_admin_can_update_users_power_levels(self) -> None:
         """The room admin should be able to update power levels."""
+        # Or, make sure we did not break setting user's power levels in a normal flow
         room_id = self._create_managed_room()
         pl = self._get_power_levels(room_id)
 

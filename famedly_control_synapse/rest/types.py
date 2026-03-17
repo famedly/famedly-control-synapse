@@ -1,6 +1,7 @@
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic.fields import FieldInfo
 from pydantic_core.core_schema import ValidationInfo
 from synapse.api.constants import (
     CREATOR_POWER_LEVEL,
@@ -49,23 +50,24 @@ class PowerLevelEventContent(BaseModel):
     # events has a validator below
     events: dict[str, int] = Field(
         default_factory=lambda: {
-            EventTypes.Name: 100,
-            EventTypes.Topic: 100,
             EventTypes.PowerLevels: CREATOR_POWER_LEVEL - 1,
             EventTypes.JoinRules: CREATOR_POWER_LEVEL - 1,
             EventTypes.GuestAccess: CREATOR_POWER_LEVEL - 1,
-            EventTypes.CanonicalAlias: 100,
-            EventTypes.RoomAvatar: 100,
         }
     )
-    events_default: int = 0
+    # Use the `exclude_if` pattern for ensuring that this field is not included if it is
+    # the default per the matrix spec. This allows these defaults to not be included
+    # when serializing this model. Other options included having `exclude_unset` and
+    # `exclude_defaults` from `model_dump()`, but that would mean the fields we override
+    # to also be excluded and that is unwanted.
+    events_default: int = Field(0, exclude_if=lambda x: x == 0)
     invite: int = CREATOR_POWER_LEVEL - 1
     kick: int = CREATOR_POWER_LEVEL - 1
-    redact: int = 100
-    state_default: int = 100
+    redact: int = Field(50, exclude_if=lambda x: x == 50)
+    state_default: int = Field(50, exclude_if=lambda x: x == 50)
     # users has a validator below
     users: dict[str, int] = Field(default_factory=dict)
-    users_default: int = 0
+    users_default: int = Field(0, exclude_if=lambda x: x == 0)
     notifications: dict[str, int] = Field(default_factory=dict)
 
     @field_validator("events")
@@ -111,7 +113,34 @@ class PowerLevelEventContent(BaseModel):
                 raise ValueError(
                     "Can not have a user with that high a power level, only the room creator"
                 )
+            if user == room_creator and power_level != CREATOR_POWER_LEVEL - 1:
+                raise ValueError("Can not change the room creator's power level")
         return v
+
+    @model_validator(mode="before")
+    @classmethod
+    def merge_events_overrides(cls, data: Any) -> Any:
+        """
+        Allow merging new 'events' overrides into the expected data. This will not do
+        validation
+        """
+        if isinstance(data, dict):
+            # Retrieve the defaults from the default_factory on the 'events' object
+            event_field: FieldInfo = cls.model_fields["events"]
+
+            # mypy thinks that default_factory() here has both too few arguments and
+            # that None is not callable. Neither of these is true
+            default_events_items = event_field.default_factory()  # type: ignore[misc, call-arg]
+
+            if "events" in data and isinstance(data["events"], dict):
+                # Update the defaults with those passed in on creation of this object
+                default_events_items.update(data["events"])
+                # Overwrite those continuing on into the object creation
+                data["events"] = default_events_items
+
+            # if there was no 'events' being asked for, then the normal default_factory
+            # will fill in the defaults for us
+        return data
 
     @model_validator(mode="after")
     def validate_membership_actions(self) -> Self:
@@ -184,6 +213,10 @@ class CreateManagedRoomRequest(BaseModel):
                     raise ValueError(
                         f"{info.field_name} contains guest_access that is not 'forbidden'"
                     )
+            if state_dict.get("type") == EventTypes.PowerLevels:
+                PowerLevelEventContent.model_validate(
+                    state_dict.get("content"), context=info.context
+                )
         return v
 
 

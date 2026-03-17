@@ -343,14 +343,13 @@ class TestManagedRoomCreation(ModuleApiTestCase):
 
     def room_config_custom(
         self,
-        room_version: str,
         creation_content: JsonDict | None = None,
         initial_state: list[JsonDict] | None = None,
     ) -> JsonDict:
         config_model = CreateManagedRoomRequest(
             room_alias_name="test_room_alias",
             name="Test Room",
-            room_version=room_version,
+            room_version=self.room_version,
             topic="This is a test room",
             groups=["test_group"],
         )
@@ -377,7 +376,6 @@ class TestManagedRoomCreation(ModuleApiTestCase):
         """
 
         custom_room_config = self.room_config_custom(
-            "10",
             initial_state=[
                 {
                     "type": EventTypes.JoinRules,
@@ -400,7 +398,6 @@ class TestManagedRoomCreation(ModuleApiTestCase):
         ), "Response should contain an error message"
 
         custom_room_config = self.room_config_custom(
-            "10",
             initial_state=[
                 {
                     "type": EventTypes.GuestAccess,
@@ -422,6 +419,28 @@ class TestManagedRoomCreation(ModuleApiTestCase):
         assert (
             "Invalid request body" in channel.json_body["error"]
         ), "Response should contain an error message"
+
+        custom_room_config = self.room_config_custom(
+            initial_state=[
+                {
+                    "type": EventTypes.PowerLevels,
+                    "state_key": "",
+                    "content": {"invite": 10},
+                },
+            ],
+        )
+
+        channel = self.make_request(
+            method="POST",
+            path=self.CREATE_PATH,
+            content=custom_room_config,
+            access_token=self.creator_access_token,
+            shorthand=False,
+        )
+
+        # Passing in a power level event to initial_state with invalid content should
+        # not be allowed
+        assert channel.code == HTTPStatus.BAD_REQUEST, channel.result
 
 
 @patch(
