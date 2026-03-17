@@ -60,28 +60,53 @@ class TestPowerLevelEventContent:
         assert plc.users_default == 0
         assert plc.ban == CREATOR_POWER_LEVEL - 1
         dumped_dict = plc.model_dump()
-        # users_default should be None as 0 is it's default
+        # users_default should be None as 0 is its default
         assert dumped_dict.get("users_default") is None
+        # events_default should be None as 0 is its default
+        assert dumped_dict.get("events_default") is None
+        # redact should be None as 50 is its default
+        assert dumped_dict.get("redact") is None
+        # state_default should be None as 50 is its default
+        assert dumped_dict.get("state_default") is None
         assert dumped_dict.get("ban") == CREATOR_POWER_LEVEL - 1
 
         # Then test that explicitly giving a value that is the default still is as expected
-        json_dict = {"users_default": 0}
+        json_dict = {
+            "users_default": 0,
+            "events_default": 0,
+            "redact": 50,
+            "state_default": 50,
+        }
         plc = PowerLevelEventContent.model_validate(json_dict)
         assert plc.users_default == 0
         assert plc.ban == CREATOR_POWER_LEVEL - 1
         dumped_dict = plc.model_dump()
-        # users_default should be None as 0 is it's default
+        # users_default should be None as 0 is its default
         assert dumped_dict.get("users_default") is None
+        # events_default should be None as 0 is its default
+        assert dumped_dict.get("events_default") is None
+        # redact should be None as 50 is its default
+        assert dumped_dict.get("redact") is None
+        # state_default should be None as 50 is its default
+        assert dumped_dict.get("state_default") is None
         assert dumped_dict.get("ban") == CREATOR_POWER_LEVEL - 1
 
         # Then test that making the value a non-default is being produced in the result
-        json_dict = {"users_default": 1}
+        json_dict = {
+            "users_default": 1,
+            "events_default": 1,
+            "redact": 51,
+            "state_default": 51,
+        }
         plc = PowerLevelEventContent.model_validate(json_dict)
         assert plc.users_default == 1
         assert plc.ban == CREATOR_POWER_LEVEL - 1
         dumped_dict = plc.model_dump()
-        # users_default should be 1 as it is being explicitly defined as a non-default value
+        # Should all be present as they are explicitly defined as a non-default value
         assert dumped_dict.get("users_default") == 1
+        assert dumped_dict.get("events_default") == 1
+        assert dumped_dict.get("redact") == 51
+        assert dumped_dict.get("state_default") == 51
         assert dumped_dict.get("ban") == CREATOR_POWER_LEVEL - 1
 
 
@@ -142,7 +167,7 @@ class TestCreateManagedRoomRequest(TestCase):
         # v10, this is added at the time of the request being processed. Users should be
         # empty
         assert len(req.power_level_content_override.users) == 0
-        # By default, 6 event types are included in the events object
+        # By default, 3 event types are included in the events object
         self.assertDictEqual(
             req.power_level_content_override.events,
             {
@@ -197,7 +222,7 @@ class TestCreateManagedRoomRequest(TestCase):
             room_config, context={"room_creator": "@room_creator:example.com"}
         )
         assert len(req.power_level_content_override.users) == 0
-        # By default, 6 event types are included in the events object
+        # By default, 3 event types are included in the events object
         self.assertDictEqual(
             req.power_level_content_override.events,
             {
@@ -215,6 +240,10 @@ class TestCreateManagedRoomRequest(TestCase):
         assert req.power_level_content_override.state_default == 50
 
     def test_arbitrary_event_type_override_does_not_skip_defaults(self) -> None:
+        """
+        Test that using unprotected event types in the power level content override does
+        not affect said overrides
+        """
         room_config = {
             "room_alias_name": "testroom",
             "name": "Test Room",
@@ -223,10 +252,11 @@ class TestCreateManagedRoomRequest(TestCase):
         }
 
         req = CreateManagedRoomRequest.model_validate(
-            room_config, context=["@room_creator:example.com"]
+            room_config, context={"room_creator": "@room_creator:example.com"}
         )
         assert len(req.power_level_content_override.users) == 0
-        # By default, 6 event types are included in the events object
+        # By default, 3 event types are included in the events object, but we added one.
+        # So there should be all 4 here
         self.assertDictEqual(
             req.power_level_content_override.events,
             {
@@ -243,6 +273,29 @@ class TestCreateManagedRoomRequest(TestCase):
         assert req.power_level_content_override.events_default == 0
         assert req.power_level_content_override.users_default == 0
         assert req.power_level_content_override.state_default == 50
+
+    def test_arbitrary_and_protected_event_type_override_can_error_appropriately(
+        self,
+    ) -> None:
+        """
+        Test that using both a protected and unprotected event type together in the
+        power level content override does not allow the protected event type to be
+        overridden
+        """
+        room_config = {
+            "room_alias_name": "testroom",
+            "name": "Test Room",
+            "power_level_content_override": {
+                "events": {EventTypes.Message: 10, EventTypes.JoinRules: 100}
+            },
+            "groups": [],
+        }
+
+        # Since one of the event types is protected, this should error
+        with pytest.raises(ValidationError):
+            CreateManagedRoomRequest.model_validate(
+                room_config, context={"room_creator": "@room_creator:example.com"}
+            )
 
     def test_with_user_powerlevel_override(self) -> None:
         """
@@ -268,7 +321,10 @@ class TestCreateManagedRoomRequest(TestCase):
 
     def test_not_adding_context_to_object_raises(self) -> None:
         """
-        Test that not including the correct context for model validation causes failure
+        Test that not including the correct context for model validation causes failure.
+        To be clear, this only will matter when the `users` object is present for the
+        `power_level_content_override`. If the `users` object is not expressly being
+        validated in the model, the context object is not required.
         """
         room_config = {
             "room_alias_name": "testroom",

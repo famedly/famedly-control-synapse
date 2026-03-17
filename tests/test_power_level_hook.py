@@ -19,7 +19,7 @@ class TestPowerLevelHook(ModuleApiTestCase):
     2. Isn't allowed if any other user is given the same power level of the room creator
     3. Isn't allowed if any sensitive event types are changed
     4. Isn't allowed if any membership actions are changed
-    5. Is allowed for normal room administrator behavior(nothing unexpected broke)
+    5. Is allowed for normal room administrator behavior (nothing unexpected broke)
     """
 
     room_version: str

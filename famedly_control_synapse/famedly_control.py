@@ -21,7 +21,6 @@ from synapse.api.errors import Codes, SynapseError
 from synapse.events import EventBase
 from synapse.http.server import JsonResource
 from synapse.module_api import ModuleApi
-from synapse.state import CREATE_KEY
 from synapse.types import StateMap
 
 from famedly_control_synapse.client import FamedlyControlClient
@@ -152,29 +151,27 @@ class FamedlyControl:
         )
 
     async def _check_power_levels_allowed(
-        self, event: EventBase, state_events: StateMap[EventBase], admin_user: str
+        self, event: EventBase, state_events: StateMap[EventBase], room_creator: str
     ) -> tuple[bool, dict | None]:
         """Block invalid power level changes in managed rooms. While any system admin
         can make changes to this event, protect that the levels we consider invariant
-        can not be changed
+        can not be changed. Use the comprehensive Pydantic model built for this purpose.
 
-        Enforced constraints:
+        Enforced constraints (as a non-exhaustive list):
         * The admin must remain the highest power level in the room.
-        * No non-admin user may have a PL >= the admin's PL.
-        * ``users_default`` must be strictly below the admin's PL.
-        * Non-admin users must stay below sensitive event thresholds
+        * Certain event type power levels are not allowed to be changed
           (``m.room.join_rules``, ``m.room.power_levels``, ``m.room.guest_access``).
         * Membership actions (ban, kick, invite) must not ever be lower than the room
           creator's PL
         """
         new_content = event.content
-        room_creator = state_events.get(CREATE_KEY)
         try:
             PowerLevelEventContent.model_validate(
-                new_content, context={"room_creator": room_creator.sender}
+                new_content, context={"room_creator": room_creator}
             )
             return True, None
         except ValidationError as e:
+            # For returning the error to the client, just select the first error
             err = e.errors()[0]
             single_validation_error = {"loc": err.get("loc"), "msg": err.get("msg")}
 
