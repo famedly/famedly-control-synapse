@@ -56,7 +56,7 @@ class _SyncTriggerJsonResource(JsonResource):
 
 
 class FamedlyControl:
-    __version__ = "0.0.1"
+    __version__ = "0.0.2"
 
     def __init__(self, config: FamedlyControlConfig, api: ModuleApi) -> None:
         self.api = api
