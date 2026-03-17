@@ -7,11 +7,24 @@
 
 **Table of Contents**
 
+- [Documentation](#documentation)
 - [Installation](#installation)
 - [Configuration](#configuration)
 - [Testing](#testing)
 - [Code Quality](#code-quality)
 - [License](#license)
+
+## Documentation
+
+This repository contains a [Synapse](https://github.com/famedly/synapse) module which allows for creating and managing "managed rooms". Those rooms have the following properties: invite-only, non-federated, cannot be left. Users are associated to `groups` in an external service and those same `groups` are associated to rooms in this module. Users are then automatically added to the corresponding rooms. This module is only "half of the work", the other half being in the external service.
+
+The openapi specification is available at [openapi-spec.yaml](openapi-spec.yaml). You can use tools like [swagger.io](https://editor.swagger.io/) for a more readable format.
+
+### Worker routing
+
+The HTTP endpoints exposed by this module are only registered on the background task synapse worker (or the main process if no dedicated worker is configured). Requests to these endpoints on any other worker will return `404 NOT_FOUND`.
+
+This must be taken into account when configuring a reverse proxy for example; all requests under `/_famedlyControl/` must be routed to the background task worker.
 
 ## Installation
 
