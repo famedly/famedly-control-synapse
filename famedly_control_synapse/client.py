@@ -78,7 +78,7 @@ class FamedlyControlClient:
             response = await self.http_client.post_json_get_json(
                 uri,
                 body,
-                headers={"Authorization": f"Bearer {self.access_token}"},
+                headers={"Authorization": [f"Bearer {self.access_token}"]},
             )
             if "Ok" in response:
                 return model.model_validate(response["Ok"])
