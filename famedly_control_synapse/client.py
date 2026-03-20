@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 _T = TypeVar("_T", bound=BaseModel)
 
 
-class Membership:
+class MembershipAction:
     """Action type for group membership changes."""
 
     ADD: Final = "Add"
