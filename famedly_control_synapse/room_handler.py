@@ -2,7 +2,7 @@ import logging
 from dataclasses import dataclass, field
 
 from prometheus_client import Counter
-from synapse.api.constants import EventTypes
+from synapse.api.constants import EventContentFields, EventTypes, Membership
 from synapse.api.errors import Codes, UnstableSpecAuthError
 from synapse.module_api import ModuleApi
 from synapse.types import Requester, create_requester
@@ -58,6 +58,15 @@ class ManagedRoomHandler:
             return str(e.errcode.value)
         return "M_UNKNOWN"
 
+    async def get_users_room_membership(self, room_id: str, mxid: str) -> str:
+        state_key = (EventTypes.Member, mxid)
+        state_map = await self.api.get_room_state(room_id, (state_key,))
+        membership_event = state_map.get(state_key)
+        if membership_event:
+            return membership_event.content[EventContentFields.MEMBERSHIP]
+        # Default for a room with the member having never been there is "leave"
+        return "leave"
+
     async def force_join_users_to_room(
         self, room_id: str, user_mxids: list[str], requester: Requester
     ) -> dict[str, str]:
@@ -83,24 +92,34 @@ class ManagedRoomHandler:
                 fake_requester = create_requester(
                     existing_member, authenticated_entity=requester.authenticated_entity
                 )
-                # First invite the user, managed room is invite-only.
-                await self.api._hs.get_room_member_handler().update_membership(
-                    requester=requester,
-                    target=fake_requester.user,
-                    room_id=room_id,
-                    action="invite",
-                    remote_room_hosts=None,
-                    ratelimit=False,
+                membership_in_room = await self.get_users_room_membership(
+                    room_id, member
                 )
-                # Make sure that the user force joins the room
-                await self.api._hs.get_room_member_handler().update_membership(
-                    requester=fake_requester,
-                    target=fake_requester.user,
-                    room_id=room_id,
-                    action="join",
-                    remote_room_hosts=None,
-                    ratelimit=False,
-                )
+                # The member may already be invited or joined to the room. If either,
+                # skip the invite
+                if membership_in_room not in (Membership.JOIN, Membership.INVITE):
+
+                    # First invite the user, managed room is invite-only.
+                    await self.api._hs.get_room_member_handler().update_membership(
+                        requester=requester,
+                        target=fake_requester.user,
+                        room_id=room_id,
+                        action=Membership.INVITE,
+                        remote_room_hosts=None,
+                        ratelimit=False,
+                    )
+
+                # Just like above, if the member is already in the room skip it
+                if membership_in_room != Membership.JOIN:
+                    # Make sure that the user force joins the room
+                    await self.api._hs.get_room_member_handler().update_membership(
+                        requester=fake_requester,
+                        target=fake_requester.user,
+                        room_id=room_id,
+                        action=Membership.JOIN,
+                        remote_room_hosts=None,
+                        ratelimit=False,
+                    )
             except UnstableSpecAuthError as e:
                 # UnstableSpecAuthError uses org.matrix.msc3848.unstable.errcode
                 # instead of the standard errcode field in the JSON response.
@@ -146,12 +165,18 @@ class ManagedRoomHandler:
                     logger.error("User %s does not exist, skipping removal", member)
                     self.increment_error_count(error_code=Codes.NOT_FOUND.value)
                     continue
+                if (
+                    await self.get_users_room_membership(room_id, member)
+                    == Membership.LEAVE
+                ):
+                    # This user is already in the room, skip it
+                    continue
 
                 await self.api.update_room_membership(
                     sender=creator_id,
                     target=existing_member,
                     room_id=room_id,
-                    new_membership="leave",
+                    new_membership=Membership.LEAVE,
                     content={"reason": "User has been removed from the room"},
                 )
             except Exception as e:
