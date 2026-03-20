@@ -60,13 +60,15 @@ class ManagedRoomHandler:
 
     async def force_join_users_to_room(
         self, room_id: str, user_mxids: list[str], requester: Requester
-    ) -> None | dict[str, str]:
+    ) -> dict[str, str]:
         """Force join users to a managed room that is invite-only.
 
         Args:
             room_id: The ID of the room to join.
             user_mxids: The list of Matrix user IDs to join.
             requester: The requester who is the admin/room creator performing the action.
+
+        Returns: A dict containing any errors keyed by user. Can be empty
         """
         errors = {}
         for member in user_mxids:
@@ -121,13 +123,20 @@ class ManagedRoomHandler:
                 self.increment_error_count(
                     error_code=self.get_error_code_from_exception(e)
                 )
-        if errors:
-            return errors
-        return None
+        return errors
 
     async def remove_users_from_room(
         self, creator_id: str, user_mxids: list[str], room_id: str
-    ) -> None | dict[str, str]:
+    ) -> dict[str, str]:
+        """Force remove users from a managed room.
+
+        Args:
+            creator_id: The ID of the room's creator, for creating the leave event
+            room_id: The ID of the room.
+            user_mxids: The list of Matrix user IDs to kick.
+
+        Returns: A dict containing any errors keyed by user. Can be empty
+        """
         errors = {}
         for member in user_mxids:
             try:
@@ -153,96 +162,80 @@ class ManagedRoomHandler:
                 self.increment_error_count(
                     error_code=self.get_error_code_from_exception(e)
                 )
-        if errors:
-            return errors
-        return None
+
+        return errors
 
     async def apply_membership_changes(
         self,
         room_id: str,
         admin_user_id: str,
-        mxids_to_add: list[str] | None = None,
-        mxids_to_remove: list[str] | None = None,
+        mxids_to_add: list[str],
+        mxids_to_remove: list[str],
     ) -> MembershipChangeResult:
         """Apply membership changes to a room using Matrix user IDs.
 
         Args:
             room_id: The room to modify.
             admin_user_id: The admin user performing the changes.
-            mxids_to_add: Matrix user IDs to invite/join.
-            mxids_to_remove: Matrix user IDs to remove.
+            mxids_to_add: Matrix user IDs to invite/join. Can be empty list
+            mxids_to_remove: Matrix user IDs to remove. Can be empty list
 
         Returns:
             A result indicating which operations failed, if any.
         """
-        result = MembershipChangeResult()
+        requester = create_requester(admin_user_id)
+        join_errors = await self.force_join_users_to_room(
+            room_id, mxids_to_add, requester
+        )
 
-        if mxids_to_add:
-            requester = create_requester(admin_user_id)
-            errors = await self.force_join_users_to_room(
-                room_id, mxids_to_add, requester
-            )
-            if errors:
-                result.join_errors.update(errors)
+        leave_errors = await self.remove_users_from_room(
+            admin_user_id, mxids_to_remove, room_id
+        )
 
-        if mxids_to_remove:
-            errors = await self.remove_users_from_room(
-                admin_user_id, mxids_to_remove, room_id
-            )
-            if errors:
-                result.leave_errors.update(errors)
-
-        return result
+        return MembershipChangeResult(
+            join_errors=join_errors, leave_errors=leave_errors
+        )
 
     async def apply_membership_changes_from_external_ids(
         self,
         room_id: str,
         admin_user_id: str,
-        external_ids_to_add: list[str] | None = None,
-        external_ids_to_remove: list[str] | None = None,
+        external_ids_to_add: list[str],
+        external_ids_to_remove: list[str],
     ) -> MembershipChangeResult:
         """Convert external user IDs and apply membership changes to a room.
 
         Args:
             room_id: The room to modify.
             admin_user_id: The admin user performing the changes.
-            external_ids_to_add: External user IDs to invite/join.
-            external_ids_to_remove: External user IDs to remove.
+            external_ids_to_add: External user IDs to invite/join. Can be empty list
+            external_ids_to_remove: External user IDs to remove. Can be empty list
 
         Returns:
             A result indicating which operations failed, if any.
         """
-        result = MembershipChangeResult()
-        mxids_to_add: list[str] = []
-        mxids_to_remove: list[str] = []
+        (
+            mxids_to_add,
+            adds_not_found,
+        ) = await self.batch_convert_external_user_ids_to_matrix_user_ids(
+            external_ids_to_add
+        )
 
-        if external_ids_to_add:
-            (
-                converted,
-                not_found,
-            ) = await self.batch_convert_external_user_ids_to_matrix_user_ids(
-                external_ids_to_add
-            )
-            result.not_found_ids.extend(not_found)
-            mxids_to_add = converted
-
-        if external_ids_to_remove:
-            (
-                converted,
-                not_found,
-            ) = await self.batch_convert_external_user_ids_to_matrix_user_ids(
-                external_ids_to_remove
-            )
-            result.not_found_ids.extend(not_found)
-            mxids_to_remove = converted
+        (
+            mxids_to_remove,
+            removes_not_found,
+        ) = await self.batch_convert_external_user_ids_to_matrix_user_ids(
+            external_ids_to_remove
+        )
 
         inner = await self.apply_membership_changes(
             room_id, admin_user_id, mxids_to_add, mxids_to_remove
         )
-        result.join_errors.update(inner.join_errors)
-        result.leave_errors.update(inner.leave_errors)
-
-        return result
+        return MembershipChangeResult(
+            not_found_ids=adds_not_found + removes_not_found,
+            join_errors=inner.join_errors,
+            leave_errors=inner.leave_errors,
+        )
 
     async def batch_convert_external_user_ids_to_matrix_user_ids(
         self, external_user_ids: list[str]
