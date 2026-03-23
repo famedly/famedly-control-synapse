@@ -75,7 +75,7 @@ class TestRoomHandler(ModuleApiTestCase):
                 requester=self.requester,
             )
         )
-        assert not error, f"Expected no errors, but got: {error}"
+        assert error == {}, f"Expected no errors, but got: {error}"
         self._check_users_joined_to_room(room_id, [user_a, user_b, user_c])
 
     def test_force_join_users_already_in_room(self) -> None:
@@ -90,7 +90,7 @@ class TestRoomHandler(ModuleApiTestCase):
                 room_id=room_id, user_mxids=[user_a, user_b], requester=self.requester
             )
         )
-        assert not error, f"Expected no errors, but got: {error}"
+        assert error == {}, f"Expected no errors, but got: {error}"
         self._check_users_joined_to_room(room_id, [user_a, user_b])
 
         error = self.get_success(
@@ -98,7 +98,7 @@ class TestRoomHandler(ModuleApiTestCase):
                 room_id=room_id, user_mxids=[user_a, user_b], requester=self.requester
             )
         )
-        assert not error, f"Expected no errors, but got: {error}"
+        assert error == {}, f"Expected no errors, but got: {error}"
         self._check_users_joined_to_room(room_id, [user_a, user_b])
 
     def test_force_join_users_including_failed_users(self) -> None:
@@ -181,7 +181,7 @@ class TestRoomHandler(ModuleApiTestCase):
                 room_id=room_id, user_mxids=[user_a, user_b], requester=self.requester
             )
         )
-        assert not error, f"Expected no errors, but got: {error}"
+        assert error == {}, f"Expected no errors, but got: {error}"
         self._check_users_joined_to_room(room_id, [user_a, user_b])
 
         # Now remove the users from the room
@@ -190,7 +190,7 @@ class TestRoomHandler(ModuleApiTestCase):
                 creator_id=self.creator, user_mxids=[user_a, user_b], room_id=room_id
             )
         )
-        assert not error, f"Expected no errors, but got: {error}"
+        assert error == {}, f"Expected no errors, but got: {error}"
         # Check that the users have been removed
         for member in [user_a, user_b]:
             path = "/rooms/%s/state/m.room.member/%s" % (room_id, member)
@@ -217,7 +217,7 @@ class TestRoomHandler(ModuleApiTestCase):
                 room_id=room_id, user_mxids=[user_a], requester=self.requester
             )
         )
-        assert not error, f"Expected no errors, but got: {error}"
+        assert error == {}, f"Expected no errors, but got: {error}"
         self._check_users_joined_to_room(room_id, [user_a])
 
         # Now attempt to remove both the valid user and the non-existent user
@@ -257,7 +257,7 @@ class TestRoomHandler(ModuleApiTestCase):
                 room_id=room_id, user_mxids=[user_a], requester=self.requester
             )
         )
-        assert not error, f"Expected no errors, but got: {error}"
+        assert error == {}, f"Expected no errors, but got: {error}"
         self._check_users_joined_to_room(room_id, [user_a])
 
         # Now attempt to remove both the valid user and the non-member user
@@ -269,7 +269,7 @@ class TestRoomHandler(ModuleApiTestCase):
             )
         )
         # This does not return an error because the method should skip the non-member user and still remove the valid user
-        assert not error
+        assert error == {}
         # Check that the valid user (user_a) has been removed from the room
         path = "/rooms/%s/state/m.room.member/%s" % (room_id, user_a)
         channel = self.make_request("GET", path, access_token=self.creator_access_token)
@@ -291,7 +291,7 @@ class TestRoomHandler(ModuleApiTestCase):
                 room_id=room_id, user_mxids=[user_a], requester=self.requester
             )
         )
-        assert not error, f"Expected no errors, but got: {error}"
+        assert error == {}, f"Expected no errors, but got: {error}"
         self._check_users_joined_to_room(room_id, [user_a])
 
         # Now attempt to remove the valid user and simulate an unexpected error
