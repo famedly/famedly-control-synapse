@@ -78,7 +78,9 @@ class ManagedRoomHandler:
 
         Returns: A dict containing any errors keyed by user. Can be empty
         """
-        errors = {}
+        errors: dict[str, str] = {}
+        if not user_mxids:
+            return errors
         # Prepare a state mapping for the users that are interesting
         state_map = await self.get_users_room_membership(room_id, user_mxids)
         for member in user_mxids:
@@ -156,7 +158,9 @@ class ManagedRoomHandler:
 
         Returns: A dict containing any errors keyed by user. Can be empty
         """
-        errors = {}
+        errors: dict[str, str] = {}
+        if not user_mxids:
+            return errors
         # Prepare a state mapping for the users that are interesting
         state_map = await self.get_users_room_membership(room_id, user_mxids)
         for member in user_mxids:
