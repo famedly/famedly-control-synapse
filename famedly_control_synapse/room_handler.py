@@ -168,7 +168,7 @@ class ManagedRoomHandler:
                     self.increment_error_count(error_code=Codes.NOT_FOUND.value)
                     continue
                 if get_membership_for_user(member, state_map) == Membership.LEAVE:
-                    # This user is already in the room, skip it
+                    # This user is not in the room, skip it
                     continue
 
                 await self.api.update_room_membership(

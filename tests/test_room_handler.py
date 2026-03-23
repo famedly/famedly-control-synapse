@@ -124,7 +124,7 @@ class TestRoomHandler(ModuleApiTestCase):
             )
         )
         # Should return an error dict with user_b (the banned user)
-        assert error, "Expected errors, but got none"
+        assert error, "Expected errors, but got nothing"
         assert user_b in error, f"Expected error for {user_b}, but got: {error}"
         # Check that the valid user (user_a) successfully joined the room
         self._check_users_joined_to_room(room_id, [user_a])
@@ -154,7 +154,7 @@ class TestRoomHandler(ModuleApiTestCase):
             )
         )
         # Should return an error dict with the non-existent user
-        assert error, "Expected errors, but got none"
+        assert error, "Expected errors, but got nothing"
         assert (
             non_existent_user in error
         ), f"Expected error for {non_existent_user}, but got: {error}"
@@ -229,7 +229,7 @@ class TestRoomHandler(ModuleApiTestCase):
             )
         )
         # Should return an error dict with the non-existent user
-        assert error, "Expected errors, but got none"
+        assert error, "Expected errors, but got nothing"
         assert (
             non_existent_user in error
         ), f"Expected error for {non_existent_user}, but got: {error}"
@@ -309,7 +309,7 @@ class TestRoomHandler(ModuleApiTestCase):
                     room_id=room_id,
                 )
             )
-            assert error, "Expected errors, but got None"
+            assert error, "Expected errors, but got nothing"
             assert user_a in error, f"Expected error for {user_a}, but got: {error}"
 
         # Check that the the user has not been removed from the room due to the unexpected error
