@@ -4,8 +4,9 @@ from dataclasses import dataclass, field
 from prometheus_client import Counter
 from synapse.api.constants import EventContentFields, EventTypes, Membership
 from synapse.api.errors import Codes, UnstableSpecAuthError
+from synapse.events import EventBase
 from synapse.module_api import ModuleApi
-from synapse.types import Requester, create_requester
+from synapse.types import Requester, StateMap, create_requester
 
 from famedly_control_synapse.config import FamedlyControlConfig
 
@@ -58,14 +59,12 @@ class ManagedRoomHandler:
             return str(e.errcode.value)
         return "M_UNKNOWN"
 
-    async def get_users_room_membership(self, room_id: str, mxid: str) -> str:
-        state_key = (EventTypes.Member, mxid)
-        state_map = await self.api.get_room_state(room_id, (state_key,))
-        membership_event = state_map.get(state_key)
-        if membership_event:
-            return membership_event.content[EventContentFields.MEMBERSHIP]
-        # Default for a room with the member having never been there is "leave"
-        return "leave"
+    async def get_users_room_membership(
+        self, room_id: str, list_of_mxids: list[str]
+    ) -> StateMap[EventBase]:
+        """Helper to retrieve a state mapping for the room for only the given users"""
+        state_keys = tuple((EventTypes.Member, mxid) for mxid in list_of_mxids)
+        return await self.api.get_room_state(room_id, state_keys)
 
     async def force_join_users_to_room(
         self, room_id: str, user_mxids: list[str], requester: Requester
@@ -80,6 +79,8 @@ class ManagedRoomHandler:
         Returns: A dict containing any errors keyed by user. Can be empty
         """
         errors = {}
+        # Prepare a state mapping for the users that are interesting
+        state_map = await self.get_users_room_membership(room_id, user_mxids)
         for member in user_mxids:
             try:
                 existing_member = await self.api.check_user_exists(member)
@@ -92,9 +93,8 @@ class ManagedRoomHandler:
                 fake_requester = create_requester(
                     existing_member, authenticated_entity=requester.authenticated_entity
                 )
-                membership_in_room = await self.get_users_room_membership(
-                    room_id, member
-                )
+                membership_in_room = get_membership_for_user(member, state_map)
+
                 # The member may already be invited or joined to the room. If either,
                 # skip the invite
                 if membership_in_room not in (Membership.JOIN, Membership.INVITE):
@@ -157,6 +157,8 @@ class ManagedRoomHandler:
         Returns: A dict containing any errors keyed by user. Can be empty
         """
         errors = {}
+        # Prepare a state mapping for the users that are interesting
+        state_map = await self.get_users_room_membership(room_id, user_mxids)
         for member in user_mxids:
             try:
                 existing_member = await self.api.check_user_exists(member)
@@ -165,10 +167,7 @@ class ManagedRoomHandler:
                     logger.error("User %s does not exist, skipping removal", member)
                     self.increment_error_count(error_code=Codes.NOT_FOUND.value)
                     continue
-                if (
-                    await self.get_users_room_membership(room_id, member)
-                    == Membership.LEAVE
-                ):
+                if get_membership_for_user(member, state_map) == Membership.LEAVE:
                     # This user is already in the room, skip it
                     continue
 
@@ -326,3 +325,26 @@ class ManagedRoomHandler:
         except Exception as e:
             logger.warning("Failed to get room creator for %s: %s", room_id, e)
         return None
+
+
+def get_membership_for_user(mxid: str, state_map: StateMap[EventBase]) -> str:
+    """
+    Helper to extract the membership of a given user based on the StateMap provided
+
+    Args:
+        mxid: The user to look up
+        state_map: A prepared StateMap that should have the users membership included,
+            if it existed
+
+    Returns: A string of the membership value, defaulting to "leave" if the user was
+        not in the room
+    """
+    membership_event = state_map.get((EventTypes.Member, mxid))
+    if membership_event:
+        # If the membership event is present, then this value should exist and not need
+        # a fallback default
+        return membership_event.content.get(
+            EventContentFields.MEMBERSHIP, Membership.LEAVE
+        )
+    # Default for a room with the member having never been there is "leave"
+    return Membership.LEAVE
