@@ -12,15 +12,17 @@
 #
 # You should have received a copy of the GNU Affero General Public License
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from parameterized import parameterized
 from synapse.api.errors import HttpResponseException
 from synapse.server import HomeServer
 from synapse.util.clock import Clock
+from twisted.internet import defer
 from twisted.internet.defer import ensureDeferred
 from twisted.internet.testing import MemoryReactor
 from twisted.trial import unittest
+from twisted.web.http_headers import Headers
 
 from famedly_control_synapse.client import FamedlyControlClient, FamedlyControlError
 from famedly_control_synapse.config import FamedlyControlConfig
@@ -116,6 +118,33 @@ class TestClientResponse(ModuleApiTestCase):
     def prepare(self, reactor: MemoryReactor, clock: Clock, homeserver: HomeServer):
         super().prepare(reactor, clock, homeserver)
         self.client = self.hs.room_control.client
+
+    def test_auth_header_is_single_bearer_token(self):
+        """Regression: Authorization header must arrive as one value, not one per character.
+
+        Synapse's SimpleHttpClient.post_json_get_json expects header values to be
+        lists. Passing a bare string causes Twisted to iterate over each character
+        and emit a separate Authorization header per character.
+        """
+        captured: dict = {}
+        mock_response = MagicMock()
+        mock_response.code = 200
+
+        async def fake_request(method, uri, headers, data=None):
+            captured["headers"] = headers
+            return mock_response
+
+        self.client.http_client.request = fake_request
+
+        with patch(
+            "synapse.http.client.readBody",
+            return_value=defer.succeed(b'{"Ok": {"members": []}}'),
+        ):
+            self.get_success(self.client.get_group_members("test_group"))
+
+        assert isinstance(captured.get("headers"), Headers)
+        auth_values = captured["headers"].getRawHeaders(b"authorization")
+        assert auth_values == [b"Bearer dummy_token_for_testing"]
 
     def test_request_success(self):
         """Test that client returns the expected list of member IDs on success."""
