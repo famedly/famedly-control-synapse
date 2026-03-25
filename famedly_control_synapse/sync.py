@@ -117,6 +117,31 @@ class GroupMembershipSyncer:
         if response.data:
             group_rooms = await self.repository.get_rooms_by_group()
 
+            groups_with_removes = {
+                group_id
+                for group_id, diffs in response.data.items()
+                if any(d.action == MembershipAction.REM for d in diffs)
+            }
+            group_members_cache: dict[str, list[str]] = {}
+            if groups_with_removes:
+                # Collect every group that shares a room with a group whose diffs
+                # contain removes. These are the only groups whose membership we need
+                # to filter non-needed removes (if a user is part of 2 groups and only
+                # 1 group is removed from a room the user shouldn't be removed from the
+                # room).
+                other_group_ids = set()
+                for group_id in groups_with_removes:
+                    rooms_with_this_group = group_rooms.get(group_id, [])
+                    for room_id, admin_user_id in rooms_with_this_group:
+                        for g, room_list in group_rooms.items():
+                            if g != group_id and (room_id, admin_user_id) in room_list:
+                                other_group_ids.add(g)
+
+                group_members_cache = {
+                    gid: await self.client.get_group_members(gid)
+                    for gid in other_group_ids
+                }
+
             for group_id, diffs in response.data.items():
                 rooms = group_rooms.get(group_id, [])
                 if not rooms:
@@ -127,7 +152,17 @@ class GroupMembershipSyncer:
                     continue
 
                 for room_id, admin_user_id in rooms:
-                    if not await self._apply_diffs(room_id, admin_user_id, diffs):
+                    other_groups_of_the_room = [
+                        g
+                        for g, room_list in group_rooms.items()
+                        if g != group_id and (room_id, admin_user_id) in room_list
+                    ]
+                    effective_diffs = self._filter_removes(
+                        diffs, other_groups_of_the_room, group_members_cache
+                    )
+                    if not await self._apply_diffs(
+                        room_id, admin_user_id, effective_diffs
+                    ):
                         sync_succeeded = False
 
         if not sync_succeeded:
@@ -143,6 +178,32 @@ class GroupMembershipSyncer:
             await self.repository.set_sync_token(
                 self._sync_token_user_id, self._sync_token
             )
+
+    def _filter_removes(
+        self,
+        diffs: list[DiffRecord],
+        other_groups: list[str],
+        group_members_cache: dict[str, list[str]],
+    ) -> list[DiffRecord]:
+        """Filter out REM diffs for users still present in another group for the same room."""
+        if not other_groups:
+            return diffs
+
+        if not any(d.action == MembershipAction.REM for d in diffs):
+            return diffs
+
+        members_in_other_groups = {
+            member
+            for gid in other_groups
+            for member in group_members_cache.get(gid, [])
+        }
+
+        return [
+            d
+            for d in diffs
+            if d.action != MembershipAction.REM
+            or d.external_user_id not in members_in_other_groups
+        ]
 
     async def _apply_diffs(
         self, room_id: str, admin_user_id: str, diffs: list[DiffRecord]

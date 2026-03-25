@@ -156,6 +156,132 @@ class TestGroupMembershipSync(ModuleApiTestCase):
         assert self._get_membership(room_id, self.member_3) == "join"
 
     @patch(
+        "famedly_control_synapse.client.FamedlyControlClient.get_group_members",
+        new_callable=AsyncMock,
+    )
+    @patch(
+        "famedly_control_synapse.client.FamedlyControlClient.get_all_groups_diffs",
+        new_callable=AsyncMock,
+    )
+    def test_sync_handles_removal_of_user_who_belongs_to_multiple_groups(
+        self, mock_get_diffs, mock_get_group_members
+    ) -> None:
+        """
+        Sync should not remove a user who was removed from a group but is still a member
+        of another assigned group.
+
+        e.g. a user was a member of test_group_1 and test_group_2. The user was removed from test_group_1
+        but is still a member of test_group_2.
+        groups info before sync: test_group_1, test_group_2
+        groups info after sync: test_group_1, test_group_2
+        """
+        room_id = self._create_managed_room_for_sync(
+            groups=["test_group_1", "test_group_2"]
+        )
+
+        # First add all members
+        mock_get_diffs.return_value = ManyGroupsDiffResponse(
+            next_sync="1",
+            data={
+                "test_group_1": [
+                    DiffRecord(user_id=self.member_1, action=MembershipAction.ADD),
+                    DiffRecord(user_id=self.member_3, action=MembershipAction.ADD),
+                ],
+                "test_group_2": [
+                    DiffRecord(user_id=self.member_1, action=MembershipAction.ADD),
+                    DiffRecord(user_id=self.member_2, action=MembershipAction.ADD),
+                ],
+            },
+        )
+
+        def mock_members_by_group(group_id: str) -> list[str]:
+            members = {
+                "test_group_1": [self.member_1, self.member_3],
+                "test_group_2": [self.member_1, self.member_2],
+            }
+            return members.get(group_id, [])
+
+        mock_get_group_members.side_effect = mock_members_by_group
+        self.get_success(self.syncer._process_sync())
+        assert self._get_membership(room_id, self.member_1) == "join"
+        assert self._get_membership(room_id, self.member_2) == "join"
+        assert self._get_membership(room_id, self.member_3) == "join"
+
+        # Now remove member_1 from the test_group_1
+        mock_get_diffs.return_value = ManyGroupsDiffResponse(
+            next_sync="2",
+            data={
+                "test_group_1": [
+                    DiffRecord(user_id=self.member_1, action=MembershipAction.REM),
+                ],
+            },
+        )
+        mock_get_group_members.side_effect = lambda group_id: {
+            "test_group_1": [self.member_3],
+            "test_group_2": [self.member_1, self.member_2],
+        }.get(group_id, [])
+        self.get_success(self.syncer._process_sync())
+
+        # Removed user should still stay, since it is still a member of test_group_2
+        assert self._get_membership(room_id, self.member_1) == "join"
+        # Remaining members unchanged
+        assert self._get_membership(room_id, self.member_2) == "join"
+        assert self._get_membership(room_id, self.member_3) == "join"
+
+    @patch(
+        "famedly_control_synapse.client.FamedlyControlClient.get_all_groups_diffs",
+        new_callable=AsyncMock,
+    )
+    def test_sync_add_diff_for_user_already_in_room_via_other_group(
+        self, mock_get_diffs
+    ) -> None:
+        """
+        Sync should handle an ADD diff for a user who is already in the room via another
+        group without error, leaving the user joined.
+
+        e.g. member_1 is already in the room via group_1. A sync then delivers an ADD
+        diff for member_1 from group_2 (which is also assigned to the same room).
+        The join should be idempotent.
+        """
+        room_id = self._create_managed_room_for_sync(
+            groups=["test_group_1", "test_group_2"]
+        )
+
+        # First sync: member_1 joins via group_1, member_2 joins via group_2
+        mock_get_diffs.return_value = ManyGroupsDiffResponse(
+            next_sync="1",
+            data={
+                "test_group_1": [
+                    DiffRecord(user_id=self.member_1, action=MembershipAction.ADD),
+                ],
+                "test_group_2": [
+                    DiffRecord(user_id=self.member_2, action=MembershipAction.ADD),
+                ],
+            },
+        )
+        self.get_success(self.syncer._process_sync())
+        assert self._get_membership(room_id, self.member_1) == "join"
+        assert self._get_membership(room_id, self.member_2) == "join"
+
+        # Second sync: member_1 is also added to group_2 (already in room via group_1)
+        mock_get_diffs.return_value = ManyGroupsDiffResponse(
+            next_sync="2",
+            data={
+                "test_group_2": [
+                    DiffRecord(user_id=self.member_1, action=MembershipAction.ADD),
+                ],
+            },
+        )
+        self.get_success(self.syncer._process_sync())
+
+        # member_1 should still be joined
+        assert self._get_membership(room_id, self.member_1) == "join"
+        # Other members unchanged
+        assert self._get_membership(room_id, self.member_2) == "join"
+        # Token must have advanced
+        assert self.syncer._sync_token == "2"
+
+    @patch(
         "famedly_control_synapse.client.FamedlyControlClient.get_all_groups_diffs",
         new_callable=AsyncMock,
     )

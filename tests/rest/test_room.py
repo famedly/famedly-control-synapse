@@ -448,6 +448,33 @@ class TestManagedRoomCreation(ModuleApiTestCase):
     new_callable=AsyncMock,
 )
 class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
+    def assert_join_for_users(self, room_id: str, users: list[str]) -> None:
+        """Helper function to assert the list of users are joined to the room."""
+        for member in users:
+            path = f"/_matrix/client/v3/rooms/{room_id}/state/m.room.member/{member}"
+            channel = self.make_request(
+                "GET", path, access_token=self.creator_access_token
+            )
+            assert (
+                channel.code == HTTPStatus.OK
+            ), f"Expected 200 but got {channel.code} for member {member}"
+            assert (
+                channel.json_body["membership"] == "join"
+            ), f"Expected membership to be join but got {channel.json_body['membership']} for member {member}"
+
+    def assert_leave_for_users(self, room_id: str, users: list[str]) -> None:
+        """Helper function to assert the users have left the room."""
+        for member in users:
+            path = f"/_matrix/client/v3/rooms/{room_id}/state/m.room.member/{member}"
+            channel = self.make_request(
+                "GET", path, access_token=self.creator_access_token
+            )
+            assert (
+                channel.code == HTTPStatus.OK
+            ), f"Expected 200 but got {channel.code} for member {member}"
+            assert (
+                channel.json_body["membership"] == "leave"
+            ), f"Expected membership to be leave but got {channel.json_body['membership']} for member {member}"
 
     def test_update_single_group_to_single_group(self, mock_get_group_members) -> None:
         """Tests that managed room which already have groups can be updated and the
@@ -493,27 +520,10 @@ class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
         assert channel.code == HTTPStatus.OK, channel.result
 
         # Check if the new member of the group is joined to the room
-        for member in new_group_members:
-            path = f"/_matrix/client/v3/rooms/{room_id}/state/m.room.member/{member}"
-            channel = self.make_request(
-                "GET", path, access_token=self.creator_access_token
-            )
-            assert (
-                channel.code == HTTPStatus.OK
-            ), f"Expected 200 but got {channel.code} for member {member}"
-            assert (
-                channel.json_body["membership"] == "join"
-            ), f"Expected membership to be join but got {channel.json_body['membership']} for member {member}"
+        self.assert_join_for_users(room_id, new_group_members)
 
         # Check if the old member who is not in the new group is removed from the room
-        path = f"/_matrix/client/v3/rooms/{room_id}/state/m.room.member/{test_member_1}"
-        channel = self.make_request("GET", path, access_token=self.creator_access_token)
-        assert (
-            channel.code == HTTPStatus.OK
-        ), f"Expected 200 but got {channel.code} for member {test_member_1}"
-        assert (
-            channel.json_body["membership"] == "leave"
-        ), f"Expected membership to be leave but got {channel.json_body['membership']} for member {test_member_1}"
+        self.assert_leave_for_users(room_id, [test_member_1])
 
         # Check the account data is updated
         room_account_data = self.get_success(
@@ -606,29 +616,8 @@ class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
         member_should_not_be_in_room = [test_member_r]
 
         # Check if the new member of the group is joined to the room
-        for member in member_should_be_in_room:
-            path = f"/_matrix/client/v3/rooms/{room_id}/state/m.room.member/{member}"
-            channel = self.make_request(
-                "GET", path, access_token=self.creator_access_token
-            )
-            assert (
-                channel.code == HTTPStatus.OK
-            ), f"Expected 200 but got {channel.code} for member {member}"
-            assert (
-                channel.json_body["membership"] == "join"
-            ), f"Expected membership to be join but got {channel.json_body['membership']} for member {member}"
-
-        for member in member_should_not_be_in_room:
-            path = f"/_matrix/client/v3/rooms/{room_id}/state/m.room.member/{member}"
-            channel = self.make_request(
-                "GET", path, access_token=self.creator_access_token
-            )
-            assert (
-                channel.code == HTTPStatus.OK
-            ), f"Expected 200 but got {channel.code} for member {member}"
-            assert (
-                channel.json_body["membership"] == "leave"
-            ), f"Expected membership to be leave but got {channel.json_body['membership']} for member {member}"
+        self.assert_join_for_users(room_id, list(member_should_be_in_room))
+        self.assert_leave_for_users(room_id, member_should_not_be_in_room)
 
         # Check the account data is updated
         room_account_data = self.get_success(
@@ -731,29 +720,8 @@ class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
         member_should_not_be_in_room = [test_member_c] + test_group_3_members
 
         # Check if the new member of the group is joined to the room
-        for member in member_should_be_in_room:
-            path = f"/_matrix/client/v3/rooms/{room_id}/state/m.room.member/{member}"
-            channel = self.make_request(
-                "GET", path, access_token=self.creator_access_token
-            )
-            assert (
-                channel.code == HTTPStatus.OK
-            ), f"Expected 200 but got {channel.code} for member {member}"
-            assert (
-                channel.json_body["membership"] == "join"
-            ), f"Expected membership to be join but got {channel.json_body['membership']} for member {member}"
-
-        for member in member_should_not_be_in_room:
-            path = f"/_matrix/client/v3/rooms/{room_id}/state/m.room.member/{member}"
-            channel = self.make_request(
-                "GET", path, access_token=self.creator_access_token
-            )
-            assert (
-                channel.code == HTTPStatus.OK
-            ), f"Expected 200 but got {channel.code} for member {member}"
-            assert (
-                channel.json_body["membership"] == "leave"
-            ), f"Expected membership to be leave but got {channel.json_body['membership']} for member {member}"
+        self.assert_join_for_users(room_id, member_should_be_in_room)
+        self.assert_leave_for_users(room_id, member_should_not_be_in_room)
 
         # Check the account data is updated
         room_account_data = self.get_success(
@@ -762,6 +730,63 @@ class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
         assert room_account_data == {
             MANAGED_ROOM_TYPE: {"groups": new_group_info}
         }, room_account_data
+
+    def test_user_from_removed_group_is_still_in_other_assigned_group(
+        self, mock_get_group_members
+    ) -> None:
+        """
+        Test the edge case when the member_r was both in group 1 and group 2, and
+        group 2 was removed from the room.
+        Old groups info: test_group_1, test_group_2
+        New groups info: test_group_1
+        """
+        test_group_1 = "test_group_1"
+        test_member_a = self.register_user("test_member_a", "password")
+        test_member_r = self.register_user("test_member_r", "password")
+
+        test_group_2 = "test_group_2"
+        test_member_b = self.register_user("test_member_b", "password")
+
+        old_group_info = [test_group_1, test_group_2]
+        new_group_info = [test_group_1]
+
+        def get_group_members(group_id):
+            if group_id == test_group_1:
+                return [test_member_a, test_member_r]
+            elif group_id == test_group_2:
+                return [test_member_b, test_member_r]
+            return []
+
+        mock_get_group_members.side_effect = get_group_members
+
+        room_id = self._create_managed_room(name="Test Room", groups=old_group_info)
+        self._test_get_membership(
+            room_id,
+            [test_member_a, test_member_b, test_member_r],
+            expect_code=200,
+        )
+        room_account_data = self.get_success(
+            self.store.get_account_data_for_room(self.creator, room_id)
+        )
+        assert room_account_data == {
+            MANAGED_ROOM_TYPE: {"groups": old_group_info}
+        }, room_account_data
+
+        # Now update the group information
+        channel = self.make_request(
+            method="POST",
+            path=self.BASE_PATH + f"/{room_id}/groups",
+            content={"groups": new_group_info},
+            access_token=self.creator_access_token,
+            shorthand=False,
+        )
+        assert channel.code == HTTPStatus.OK, channel.result
+
+        member_should_be_in_room = [test_member_a, test_member_r]
+        member_should_not_be_in_room = [test_member_b]
+
+        self.assert_join_for_users(room_id, member_should_be_in_room)
+        self.assert_leave_for_users(room_id, member_should_not_be_in_room)
 
     def test_prevent_room_creator_membership_change(
         self, mock_get_group_members
@@ -933,17 +958,9 @@ class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
 
         # Since both members failed to be removed, they should still be in the room
         # and the new member should be joined to the room
-        for member in [test_member_1, test_member_2, test_member_3]:
-            path = f"/_matrix/client/v3/rooms/{room_id}/state/m.room.member/{member}"
-            channel = self.make_request(
-                "GET", path, access_token=self.creator_access_token
-            )
-            assert (
-                channel.code == HTTPStatus.OK
-            ), f"Expected 200 but got {channel.code} for member {member}"
-            assert (
-                channel.json_body["membership"] == "join"
-            ), f"Expected membership to be join but got {channel.json_body['membership']} for member {member}"
+        self.assert_join_for_users(
+            room_id, [test_member_1, test_member_2, test_member_3]
+        )
 
         # Check both metrics are incremented by 1 each
         new_value_unknown = famedly_control_user_sync_error.labels(
