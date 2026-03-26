@@ -15,6 +15,7 @@
 import logging
 
 from synapse.module_api import ModuleApi
+from synapse.util.duration import Duration
 
 from famedly_control_synapse.client import DiffRecord, FamedlyControlClient, Membership
 from famedly_control_synapse.config import FamedlyControlConfig
@@ -48,15 +49,17 @@ class GroupMembershipSyncer:
         self._is_running = False
 
     def start(self) -> None:
-        """Start the periodic background sync.
+        """
+        Start the periodic background sync.
 
         Safe to call multiple times, does nothing if already running.
-        Schedules ``start_sync_loop`` as a background process which
-        checks for a sync token; if one exists it sets up the periodic
-        ``_process_sync`` call via ``looping_background_call``.
+        Schedules `start_sync_loop()` as a background process which
+        checks for a sync token; if one exists it sets up a loop that
+        periodically calls `_process_sync()`
         """
         if self._is_running or not self.is_enabled:
             return
+        # Mark the loop as starting early, to avoid multiple background loops
         self._is_running = True
         self.api.run_as_background_process(
             "famedly_control_group_membership_sync", self.start_sync_loop
@@ -67,24 +70,42 @@ class GroupMembershipSyncer:
 
         If the sync token hasn't been loaded yet, tries to read it from the
         database.  If it's still not available (no managed room created yet),
-        returns and will be retried on the next api request. Otherwise sets
+        returns and will be retried on the next api request. Otherwise, sets
         up the periodic ``_process_sync``.
         """
         entry = await self.repository.get_sync_token_entry()
         if entry is None:
             self._is_running = False
             return
+
+        logger.info("Starting loop to poll /get_all_groups_diffs")
+
         self._sync_token_user_id, self._sync_token = entry
-        self.api.looping_background_call(
-            self._process_sync,
-            self.polling_interval_seconds * 1000,
-            desc="famedly_control_group_membership_sync",
-        )
+
+        while self._is_running:
+            try:
+                await self._process_sync()
+            # Several kinds of exceptions can be raised here. Timeouts, Cancellations,
+            # Network Exceptions, HTTP Exceptions, general exceptions from database or
+            # IO, etc. I believe the CancelledError from twisted.defer can be raised
+            # from the sleep() below. Perhaps in the future that should be caught, it
+            # should only occur during server shutdown though and can safely ignored
+            # (although it may look rather scary in the logs)
+            except Exception as e:
+                logger.error("Exception during loop: %r", e)
+                await self.api._hs.get_clock().sleep(
+                    Duration(seconds=self.polling_interval_seconds)
+                )
 
     async def _process_sync(self) -> None:
-        """Execute a single sync iteration: fetch diffs and apply membership changes."""
+        """
+        Execute a single sync iteration: fetch diffs and apply membership changes.
+
+        Long poll for the response. If a 'next_sync' token is returned, use that on the
+        next request.
+        """
         response = await self.client.get_all_groups_diffs(
-            sync=self._sync_token, timeout=30
+            sync=self._sync_token, timeout=self.polling_interval_seconds
         )
 
         sync_succeeded = True
@@ -112,7 +133,9 @@ class GroupMembershipSyncer:
             return
 
         self._sync_token = response.next_sync
-        if self._sync_token_user_id is not None:
+        if self._sync_token_user_id is None:
+            logger.error("Loop was running but there was no user id for the sync token")
+        else:
             await self.repository.set_sync_token(
                 self._sync_token_user_id, self._sync_token
             )
