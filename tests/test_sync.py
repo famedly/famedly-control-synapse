@@ -12,7 +12,7 @@ from twisted.internet.testing import MemoryReactor
 from famedly_control_synapse.client import (
     DiffRecord,
     ManyGroupsDiffResponse,
-    Membership,
+    MembershipAction,
 )
 from famedly_control_synapse.repository import ManagedRoomRepository
 from famedly_control_synapse.rest.types import CreateManagedRoomRequest
@@ -88,7 +88,7 @@ class TestGroupMembershipSync(ModuleApiTestCase):
             next_sync="1",
             data={
                 "group_a": [
-                    DiffRecord(user_id=self.member_1, action=Membership.ADD),
+                    DiffRecord(user_id=self.member_1, action=MembershipAction.ADD),
                 ],
             },
         )
@@ -100,8 +100,8 @@ class TestGroupMembershipSync(ModuleApiTestCase):
             next_sync="2",
             data={
                 "group_a": [
-                    DiffRecord(user_id=self.member_2, action=Membership.ADD),
-                    DiffRecord(user_id=self.member_3, action=Membership.ADD),
+                    DiffRecord(user_id=self.member_2, action=MembershipAction.ADD),
+                    DiffRecord(user_id=self.member_3, action=MembershipAction.ADD),
                 ],
             },
         )
@@ -126,9 +126,9 @@ class TestGroupMembershipSync(ModuleApiTestCase):
             next_sync="1",
             data={
                 "group_b": [
-                    DiffRecord(user_id=self.member_1, action=Membership.ADD),
-                    DiffRecord(user_id=self.member_2, action=Membership.ADD),
-                    DiffRecord(user_id=self.member_3, action=Membership.ADD),
+                    DiffRecord(user_id=self.member_1, action=MembershipAction.ADD),
+                    DiffRecord(user_id=self.member_2, action=MembershipAction.ADD),
+                    DiffRecord(user_id=self.member_3, action=MembershipAction.ADD),
                 ],
             },
         )
@@ -142,7 +142,7 @@ class TestGroupMembershipSync(ModuleApiTestCase):
             next_sync="2",
             data={
                 "group_b": [
-                    DiffRecord(user_id=self.member_1, action=Membership.REM),
+                    DiffRecord(user_id=self.member_1, action=MembershipAction.REM),
                 ],
             },
         )
@@ -168,8 +168,8 @@ class TestGroupMembershipSync(ModuleApiTestCase):
             next_sync="1",
             data={
                 "group_mixed": [
-                    DiffRecord(user_id=self.member_1, action=Membership.ADD),
-                    DiffRecord(user_id=self.member_2, action=Membership.ADD),
+                    DiffRecord(user_id=self.member_1, action=MembershipAction.ADD),
+                    DiffRecord(user_id=self.member_2, action=MembershipAction.ADD),
                 ],
             },
         )
@@ -182,8 +182,8 @@ class TestGroupMembershipSync(ModuleApiTestCase):
             next_sync="2",
             data={
                 "group_mixed": [
-                    DiffRecord(user_id=self.member_3, action=Membership.ADD),
-                    DiffRecord(user_id=self.member_1, action=Membership.REM),
+                    DiffRecord(user_id=self.member_3, action=MembershipAction.ADD),
+                    DiffRecord(user_id=self.member_1, action=MembershipAction.REM),
                 ],
             },
         )
@@ -253,7 +253,7 @@ class TestGroupMembershipSync(ModuleApiTestCase):
             next_sync="10",
             data={
                 "group_d": [
-                    DiffRecord(user_id=self.member_1, action=Membership.ADD),
+                    DiffRecord(user_id=self.member_1, action=MembershipAction.ADD),
                 ],
             },
         )
@@ -298,7 +298,7 @@ class TestGroupMembershipSync(ModuleApiTestCase):
             next_sync="1",
             data={
                 "unknown_group": [
-                    DiffRecord(user_id=self.member_1, action=Membership.ADD),
+                    DiffRecord(user_id=self.member_1, action=MembershipAction.ADD),
                 ],
             },
         )
@@ -324,7 +324,7 @@ class TestGroupMembershipSync(ModuleApiTestCase):
             next_sync="1",
             data={
                 "shared_group": [
-                    DiffRecord(user_id=self.member_1, action=Membership.ADD),
+                    DiffRecord(user_id=self.member_1, action=MembershipAction.ADD),
                 ],
             },
         )

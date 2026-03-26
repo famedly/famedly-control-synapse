@@ -2,10 +2,11 @@ import logging
 from dataclasses import dataclass, field
 
 from prometheus_client import Counter
-from synapse.api.constants import EventTypes
+from synapse.api.constants import EventContentFields, EventTypes, Membership
 from synapse.api.errors import Codes, UnstableSpecAuthError
+from synapse.events import EventBase
 from synapse.module_api import ModuleApi
-from synapse.types import Requester, create_requester
+from synapse.types import Requester, StateMap, create_requester
 
 from famedly_control_synapse.config import FamedlyControlConfig
 
@@ -58,17 +59,30 @@ class ManagedRoomHandler:
             return str(e.errcode.value)
         return "M_UNKNOWN"
 
+    async def get_users_room_membership(
+        self, room_id: str, list_of_mxids: list[str]
+    ) -> StateMap[EventBase]:
+        """Helper to retrieve a state mapping for the room for only the given users"""
+        state_keys = tuple((EventTypes.Member, mxid) for mxid in list_of_mxids)
+        return await self.api.get_room_state(room_id, state_keys)
+
     async def force_join_users_to_room(
         self, room_id: str, user_mxids: list[str], requester: Requester
-    ) -> None | dict[str, str]:
+    ) -> dict[str, str]:
         """Force join users to a managed room that is invite-only.
 
         Args:
             room_id: The ID of the room to join.
             user_mxids: The list of Matrix user IDs to join.
             requester: The requester who is the admin/room creator performing the action.
+
+        Returns: A dict containing any errors keyed by user. Can be empty
         """
-        errors = {}
+        errors: dict[str, str] = {}
+        if not user_mxids:
+            return errors
+        # Prepare a state mapping for the users that are interesting
+        state_map = await self.get_users_room_membership(room_id, user_mxids)
         for member in user_mxids:
             try:
                 existing_member = await self.api.check_user_exists(member)
@@ -81,24 +95,33 @@ class ManagedRoomHandler:
                 fake_requester = create_requester(
                     existing_member, authenticated_entity=requester.authenticated_entity
                 )
-                # First invite the user, managed room is invite-only.
-                await self.api._hs.get_room_member_handler().update_membership(
-                    requester=requester,
-                    target=fake_requester.user,
-                    room_id=room_id,
-                    action="invite",
-                    remote_room_hosts=None,
-                    ratelimit=False,
-                )
-                # Make sure that the user force joins the room
-                await self.api._hs.get_room_member_handler().update_membership(
-                    requester=fake_requester,
-                    target=fake_requester.user,
-                    room_id=room_id,
-                    action="join",
-                    remote_room_hosts=None,
-                    ratelimit=False,
-                )
+                membership_in_room = get_membership_for_user(member, state_map)
+
+                # The member may already be invited or joined to the room. If either,
+                # skip the invite
+                if membership_in_room not in (Membership.JOIN, Membership.INVITE):
+
+                    # First invite the user, managed room is invite-only.
+                    await self.api._hs.get_room_member_handler().update_membership(
+                        requester=requester,
+                        target=fake_requester.user,
+                        room_id=room_id,
+                        action=Membership.INVITE,
+                        remote_room_hosts=None,
+                        ratelimit=False,
+                    )
+
+                # Just like above, if the member is already in the room skip it
+                if membership_in_room != Membership.JOIN:
+                    # Make sure that the user force joins the room
+                    await self.api._hs.get_room_member_handler().update_membership(
+                        requester=fake_requester,
+                        target=fake_requester.user,
+                        room_id=room_id,
+                        action=Membership.JOIN,
+                        remote_room_hosts=None,
+                        ratelimit=False,
+                    )
             except UnstableSpecAuthError as e:
                 # UnstableSpecAuthError uses org.matrix.msc3848.unstable.errcode
                 # instead of the standard errcode field in the JSON response.
@@ -121,14 +144,25 @@ class ManagedRoomHandler:
                 self.increment_error_count(
                     error_code=self.get_error_code_from_exception(e)
                 )
-        if errors:
-            return errors
-        return None
+        return errors
 
     async def remove_users_from_room(
         self, creator_id: str, user_mxids: list[str], room_id: str
-    ) -> None | dict[str, str]:
-        errors = {}
+    ) -> dict[str, str]:
+        """Force remove users from a managed room.
+
+        Args:
+            creator_id: The ID of the room's creator, for creating the leave event
+            room_id: The ID of the room.
+            user_mxids: The list of Matrix user IDs to kick.
+
+        Returns: A dict containing any errors keyed by user. Can be empty
+        """
+        errors: dict[str, str] = {}
+        if not user_mxids:
+            return errors
+        # Prepare a state mapping for the users that are interesting
+        state_map = await self.get_users_room_membership(room_id, user_mxids)
         for member in user_mxids:
             try:
                 existing_member = await self.api.check_user_exists(member)
@@ -137,12 +171,15 @@ class ManagedRoomHandler:
                     logger.error("User %s does not exist, skipping removal", member)
                     self.increment_error_count(error_code=Codes.NOT_FOUND.value)
                     continue
+                if get_membership_for_user(member, state_map) == Membership.LEAVE:
+                    # This user is not in the room, skip it
+                    continue
 
                 await self.api.update_room_membership(
                     sender=creator_id,
                     target=existing_member,
                     room_id=room_id,
-                    new_membership="leave",
+                    new_membership=Membership.LEAVE,
                     content={"reason": "User has been removed from the room"},
                 )
             except Exception as e:
@@ -153,96 +190,80 @@ class ManagedRoomHandler:
                 self.increment_error_count(
                     error_code=self.get_error_code_from_exception(e)
                 )
-        if errors:
-            return errors
-        return None
+
+        return errors
 
     async def apply_membership_changes(
         self,
         room_id: str,
         admin_user_id: str,
-        mxids_to_add: list[str] | None = None,
-        mxids_to_remove: list[str] | None = None,
+        mxids_to_add: list[str],
+        mxids_to_remove: list[str],
     ) -> MembershipChangeResult:
         """Apply membership changes to a room using Matrix user IDs.
 
         Args:
             room_id: The room to modify.
             admin_user_id: The admin user performing the changes.
-            mxids_to_add: Matrix user IDs to invite/join.
-            mxids_to_remove: Matrix user IDs to remove.
+            mxids_to_add: Matrix user IDs to invite/join. Can be empty list
+            mxids_to_remove: Matrix user IDs to remove. Can be empty list
 
         Returns:
             A result indicating which operations failed, if any.
         """
-        result = MembershipChangeResult()
+        requester = create_requester(admin_user_id)
+        join_errors = await self.force_join_users_to_room(
+            room_id, mxids_to_add, requester
+        )
 
-        if mxids_to_add:
-            requester = create_requester(admin_user_id)
-            errors = await self.force_join_users_to_room(
-                room_id, mxids_to_add, requester
-            )
-            if errors:
-                result.join_errors.update(errors)
+        leave_errors = await self.remove_users_from_room(
+            admin_user_id, mxids_to_remove, room_id
+        )
 
-        if mxids_to_remove:
-            errors = await self.remove_users_from_room(
-                admin_user_id, mxids_to_remove, room_id
-            )
-            if errors:
-                result.leave_errors.update(errors)
-
-        return result
+        return MembershipChangeResult(
+            join_errors=join_errors, leave_errors=leave_errors
+        )
 
     async def apply_membership_changes_from_external_ids(
         self,
         room_id: str,
         admin_user_id: str,
-        external_ids_to_add: list[str] | None = None,
-        external_ids_to_remove: list[str] | None = None,
+        external_ids_to_add: list[str],
+        external_ids_to_remove: list[str],
     ) -> MembershipChangeResult:
         """Convert external user IDs and apply membership changes to a room.
 
         Args:
             room_id: The room to modify.
             admin_user_id: The admin user performing the changes.
-            external_ids_to_add: External user IDs to invite/join.
-            external_ids_to_remove: External user IDs to remove.
+            external_ids_to_add: External user IDs to invite/join. Can be empty list
+            external_ids_to_remove: External user IDs to remove. Can be empty list
 
         Returns:
             A result indicating which operations failed, if any.
         """
-        result = MembershipChangeResult()
-        mxids_to_add: list[str] = []
-        mxids_to_remove: list[str] = []
+        (
+            mxids_to_add,
+            adds_not_found,
+        ) = await self.batch_convert_external_user_ids_to_matrix_user_ids(
+            external_ids_to_add
+        )
 
-        if external_ids_to_add:
-            (
-                converted,
-                not_found,
-            ) = await self.batch_convert_external_user_ids_to_matrix_user_ids(
-                external_ids_to_add
-            )
-            result.not_found_ids.extend(not_found)
-            mxids_to_add = converted
-
-        if external_ids_to_remove:
-            (
-                converted,
-                not_found,
-            ) = await self.batch_convert_external_user_ids_to_matrix_user_ids(
-                external_ids_to_remove
-            )
-            result.not_found_ids.extend(not_found)
-            mxids_to_remove = converted
+        (
+            mxids_to_remove,
+            removes_not_found,
+        ) = await self.batch_convert_external_user_ids_to_matrix_user_ids(
+            external_ids_to_remove
+        )
 
         inner = await self.apply_membership_changes(
             room_id, admin_user_id, mxids_to_add, mxids_to_remove
         )
-        result.join_errors.update(inner.join_errors)
-        result.leave_errors.update(inner.leave_errors)
-
-        return result
+        return MembershipChangeResult(
+            not_found_ids=adds_not_found + removes_not_found,
+            join_errors=inner.join_errors,
+            leave_errors=inner.leave_errors,
+        )
 
     async def batch_convert_external_user_ids_to_matrix_user_ids(
         self, external_user_ids: list[str]
@@ -308,3 +329,26 @@ class ManagedRoomHandler:
         except Exception as e:
             logger.warning("Failed to get room creator for %s: %s", room_id, e)
         return None
+
+
+def get_membership_for_user(mxid: str, state_map: StateMap[EventBase]) -> str:
+    """
+    Helper to extract the membership of a given user based on the StateMap provided
+
+    Args:
+        mxid: The user to look up
+        state_map: A prepared StateMap that should have the users membership included,
+            if it existed
+
+    Returns: A string of the membership value, defaulting to "leave" if the user was
+        not in the room
+    """
+    membership_event = state_map.get((EventTypes.Member, mxid))
+    if membership_event:
+        # If the membership event is present, then this value should exist and not need
+        # a fallback default
+        return membership_event.content.get(
+            EventContentFields.MEMBERSHIP, Membership.LEAVE
+        )
+    # Default for a room with the member having never been there is "leave"
+    return Membership.LEAVE

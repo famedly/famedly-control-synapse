@@ -17,7 +17,11 @@ import logging
 from synapse.module_api import ModuleApi
 from synapse.util.duration import Duration
 
-from famedly_control_synapse.client import DiffRecord, FamedlyControlClient, Membership
+from famedly_control_synapse.client import (
+    DiffRecord,
+    FamedlyControlClient,
+    MembershipAction,
+)
 from famedly_control_synapse.config import FamedlyControlConfig
 from famedly_control_synapse.repository import ManagedRoomRepository
 from famedly_control_synapse.room_handler import ManagedRoomHandler
@@ -149,10 +153,10 @@ class GroupMembershipSyncer:
             True if all operations succeeded, False if any failed.
         """
         external_ids_to_add = [
-            d.external_user_id for d in diffs if d.action == Membership.ADD
+            d.external_user_id for d in diffs if d.action == MembershipAction.ADD
         ]
         external_ids_to_remove = [
-            d.external_user_id for d in diffs if d.action == Membership.REM
+            d.external_user_id for d in diffs if d.action == MembershipAction.REM
         ]
 
         result = await self.room_handler.apply_membership_changes_from_external_ids(
