@@ -51,17 +51,27 @@ modules:
 
 ## Testing
 
-To create virtual env and install dependency:
+To create a virtual development environment and install dependencies:
 ```console
 hatch shell
 ```
 
-The tests use `pytest`, with the development environment managed by Hatch. You can
-run the test suite and generate a coverage report with:
+The tests use pytest, with the development environment managed by Hatch. Running the tests
+can be done like this:
 
 ```console
-hatch run cov
+hatch test
 ```
+
+#### Additional optional testing arguments:
+Run the tests in parallel: `-p`
+
+Collect coverage data (automatically output as `lcov.info`): `-c`
+
+#### Running a specific test:
+Selecting a specific test to run can be as easy as providing the path to the test. All tests start from
+the base test directory, `tests`. If running all tests, this can be left out. For specific tests, see
+the [pytest usage docs](https://docs.pytest.org/en/stable/how-to/usage.html#specifying-which-tests-to-run) for more information.
 
 ## Code Quality
 

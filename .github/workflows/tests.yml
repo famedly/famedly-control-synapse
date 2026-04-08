@@ -24,6 +24,7 @@ jobs:
     strategy:
       matrix:
         python-version: ["3.10", "3.11", "3.12", "3.13"]
+        database: ["sqlite", "postgres"]
     steps:
       - uses: actions/checkout@v4
 
@@ -39,6 +40,7 @@ jobs:
           python -m pip install hatch
 
       - name: Set up PostgreSQL 15
+        if: matrix.database == 'postgres'
         # 1. Mount postgres data files onto a tmpfs in-memory filesystem to reduce overhead of docker's overlayfs layer.
         # 2. Expose the unix socket for postgres. This removes latency of using docker-proxy for connections.
         run: |
@@ -62,10 +64,15 @@ jobs:
           args: check --target-version ${{ env.PYTHON_TARGET }}
 
       - name: Tests and coverage
-        run: hatch run cov
+        run: hatch test --python ${{ matrix.python-version }} -p -c
         env:
-          # to ensure we run ci:cov instead of default:cov, where the former generates more coverage files
-          HATCH_ENV: "ci"
+          # These two options can always be populated, as unless the third below
+          # is also enabled they are just ignored.
+          SYNAPSE_POSTGRES_USER: "postgres"
+          SYNAPSE_POSTGRES_PASSWORD: "postgres"
+          # Although the options are 'postgres' and 'sqlite', we only populate this when
+          # it is 'postgres'
+          SYNAPSE_POSTGRES: ${{ matrix.database == 'postgres' || ''}}
 
       - name: Codecov - Upload coverage
         uses: codecov/codecov-action@v4
