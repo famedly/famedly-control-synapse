@@ -12,9 +12,6 @@ from synapse.api.constants import (
 from synapse.types import JsonDict
 from typing_extensions import Self
 
-MANAGED_ROOM_TYPE = "de.famedly.managedRoom"
-SYNC_TOKEN_TYPE = "de.famedly.roomControl.lastSyncToken.v1"
-
 
 class CreationContent(BaseModel):
     """Pydantic model for CreationContent."""
@@ -182,7 +179,7 @@ class CreateManagedRoomRequest(BaseModel):
     power_level_content_override: PowerLevelEventContent = Field(
         default_factory=PowerLevelEventContent
     )
-    room_version: str | None = None
+    room_version: str
     groups: list[str]
     is_direct: Literal[False] = Field(
         default=False, description="is_direct cannot be enabled for managed rooms."

@@ -17,10 +17,10 @@ from typing import Any
 
 from pydantic import ValidationError
 from synapse.api.constants import EventTypes, Membership
-from synapse.api.errors import Codes, SynapseError
 from synapse.events import EventBase
 from synapse.http.server import JsonResource
 from synapse.module_api import ModuleApi
+from synapse.module_api.errors import Codes, SynapseError
 from synapse.types import StateMap
 
 from famedly_control_synapse.client import FamedlyControlClient
@@ -56,6 +56,8 @@ class _SyncTriggerJsonResource(JsonResource):
 
 
 class FamedlyControl:
+    # NOTE: Adjust the openapi-spec.yaml file version when this changes. Match this even
+    # if there are no changes to the openapi spec.
     __version__ = "0.0.2"
 
     def __init__(self, config: FamedlyControlConfig, api: ModuleApi) -> None:
@@ -64,7 +66,7 @@ class FamedlyControl:
         self.clock = api._hs.get_clock()
         self.config = config
         self.client = FamedlyControlClient(self.api, config)
-        self.room_handler = ManagedRoomHandler(self.api, self.config)
+        self.room_handler = ManagedRoomHandler(self.api, self.config, self.client)
         self.repository = ManagedRoomRepository(api)
 
         if self.api.should_run_background_tasks():
@@ -75,11 +77,11 @@ class FamedlyControl:
             # Register servlets
             self.resource = _SyncTriggerJsonResource(self.api._hs, self.syncer)
             CreateManagedRoomResource(
-                self.api, self.client, self.room_handler, self.repository
+                self.api, self.room_handler, self.repository
             ).register(self.resource)
             ListManagedRoomsResource(self.api, self.repository).register(self.resource)
             AssignGroupsToManagedRoomResource(
-                self.api, self.client, self.room_handler, self.repository
+                self.api, self.room_handler, self.repository
             ).register(self.resource)
             self.api.register_web_resource(MANAGED_ROOM_API_PREFIX, self.resource)
 

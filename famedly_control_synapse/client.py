@@ -3,8 +3,10 @@ from http import HTTPStatus
 from typing import Final, Literal, TypeVar
 
 from pydantic import BaseModel, Field
-from synapse.api.errors import HttpResponseException, SynapseError
+from synapse.api.errors import HttpResponseException
 from synapse.module_api import ModuleApi
+from synapse.module_api.errors import Codes, SynapseError
+from synapse.types import JsonDict
 
 from famedly_control_synapse.config import FamedlyControlConfig
 
@@ -154,10 +156,16 @@ class FamedlyControlClient:
 class FamedlyControlError(SynapseError):
     """Base exception for FamedlyControl API errors."""
 
-    code = HTTPStatus.INTERNAL_SERVER_ERROR
-    msg = "An error occurred with the Famedly Control API"
-
-    def __init__(self, code: HTTPStatus | None = None, msg: str | None = None):
-        self.msg = msg or self.__class__.msg
-        self.code = code or self.__class__.code
-        super().__init__(self.code, self.msg)
+    def __init__(
+        self,
+        code: int | None = None,
+        msg: str | None = None,
+        errcode: str | None = None,
+        additional_fields: JsonDict | None = None,
+    ):
+        super().__init__(
+            code or HTTPStatus.INTERNAL_SERVER_ERROR,
+            msg or "An error occurred with the Famedly Control API",
+            errcode=errcode or Codes.UNKNOWN,
+            additional_fields=additional_fields,
+        )

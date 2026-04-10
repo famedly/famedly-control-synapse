@@ -119,14 +119,14 @@ class TestClientResponse(ModuleApiTestCase):
         super().prepare(reactor, clock, homeserver)
         self.client = self.hs.room_control.client
 
-    def test_auth_header_is_single_bearer_token(self):
+    def test_auth_header_is_single_bearer_token(self) -> None:
         """Regression: Authorization header must arrive as one value, not one per character.
 
         Synapse's SimpleHttpClient.post_json_get_json expects header values to be
         lists. Passing a bare string causes Twisted to iterate over each character
         and emit a separate Authorization header per character.
         """
-        captured: dict = {}
+        captured: dict[str, Headers] = {}
         mock_response = MagicMock()
         mock_response.code = 200
 
@@ -146,7 +146,7 @@ class TestClientResponse(ModuleApiTestCase):
         auth_values = captured["headers"].getRawHeaders(b"authorization")
         assert auth_values == [b"Bearer dummy_token_for_testing"]
 
-    def test_request_success(self):
+    def test_request_success(self) -> None:
         """Test that client returns the expected list of member IDs on success."""
         expected_members = ["user1_external_id", "user2_external_id"]
 
@@ -164,7 +164,9 @@ class TestClientResponse(ModuleApiTestCase):
         assert members == expected_members
 
     @parameterized.expand([("Forbidden", 403), ("Unauthorized", 401)])
-    def test_request_fail_with_err_response_types(self, error_type, expected_code):
+    def test_request_fail_with_err_response_types(
+        self, error_type, expected_code
+    ) -> None:
         """Test that client returns 200 with Err message raises FamedlyControlError with proper code."""
         self.client.http_client.post_json_get_json = AsyncMock(
             return_value={"Err": {"type": error_type}}
@@ -177,7 +179,7 @@ class TestClientResponse(ModuleApiTestCase):
             failure.value.msg == f"Famedly Control API: Error in response: {error_type}"
         )
 
-    def test_request_fail_with_err_response_unknown_type(self):
+    def test_request_fail_with_err_response_unknown_type(self) -> None:
         """Test that client returns 200 with Err message with unknown type raises FamedlyControlError with 500 code."""
         self.client.http_client.post_json_get_json = AsyncMock(
             return_value={"Err": {"type": "SomeUnknownType"}}
@@ -192,7 +194,7 @@ class TestClientResponse(ModuleApiTestCase):
             == "Famedly Control API: Error in response: SomeUnknownType"
         )
 
-    def test_request_fail_with_err_response_not_dict(self):
+    def test_request_fail_with_err_response_not_dict(self) -> None:
         """Test that client returns 200 with Err message with non dict format raises FamedlyControlError with 500 code."""
         self.client.http_client.post_json_get_json = AsyncMock(
             return_value={"Err": "SomeError"}
@@ -206,7 +208,7 @@ class TestClientResponse(ModuleApiTestCase):
             == "Famedly Control API: Unexpected error: 'str' object has no attribute 'get'"
         )
 
-    def test_request_fail_with_unexpected_response(self):
+    def test_request_fail_with_unexpected_response(self) -> None:
         """Test that client raises FamedlyControlError when response format is neither "Ok" nor "Err"."""
         self.client.http_client.post_json_get_json = AsyncMock(
             return_value={"Unexpected": "format"}
@@ -220,7 +222,7 @@ class TestClientResponse(ModuleApiTestCase):
             == "Famedly Control API: Unexpected response format: {'Unexpected': 'format'}"
         )
 
-    def test_request_fail_with_http_exception(self):
+    def test_request_fail_with_http_exception(self) -> None:
         """Test that client raises any other HTTP error raises FamedlyControlError."""
         self.client.http_client.post_json_get_json = AsyncMock(
             side_effect=HttpResponseException(500, "Internal Server Error", b"")
@@ -234,7 +236,7 @@ class TestClientResponse(ModuleApiTestCase):
             == "Famedly Control API: HTTP response error: Internal Server Error"
         )
 
-    def test_request_fail_with_validation_error(self):
+    def test_request_fail_with_validation_error(self) -> None:
         """Test that client raises FamedlyControlError on validation error."""
         self.client.http_client.post_json_get_json = AsyncMock(
             return_value={
@@ -249,7 +251,7 @@ class TestClientResponse(ModuleApiTestCase):
             "Famedly Control API: Unexpected error: 1 validation error for GroupMembersResponse"
         )
 
-    def test_request_fail_with_generic_exception(self):
+    def test_request_fail_with_generic_exception(self) -> None:
         """Test that client raises FamedlyControlError on any unexpected exception."""
         self.client.http_client.post_json_get_json = AsyncMock(
             side_effect=RuntimeError("something broke")

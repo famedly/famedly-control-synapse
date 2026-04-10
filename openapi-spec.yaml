@@ -3,7 +3,7 @@ info:
   title: Famedly Managed Room API
   description: >
     API for creating and managing Famedly managed rooms.
-  version: "1.0.0"
+  version: "0.0.2"
 servers:
   - url: https://example.com
 paths:
@@ -71,13 +71,33 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [room_id]
+                required: [room_id, groups]
                 properties:
                   room_id:
                     type: string
                     example: "!sefiuhWgwghwWgh:example.com"
+                  groups:
+                    $ref: "#/components/schemas/GroupList"
+        "207":
+          description: Room created successfully, but not all users could be joined.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [room_id, groups, details]
+                properties:
+                  room_id:
+                    type: string
+                    example: "!sefiuhWgwghwWgh:example.com"
+                  groups:
+                    $ref: "#/components/schemas/GroupList"
+                  details:
+                    $ref: "#/components/schemas/JoinLeaveErrors"
+
         "400":
           description: The request is invalid. A meaningful errcode and description error text will be returned.
+        "403":
+          description: Forbidden. User is not administrator.
 
   /_famedlyControl/v1/managedRooms/rooms:
     get:
@@ -153,6 +173,33 @@ paths:
       responses:
         "200":
           description: Group membership updated successfully.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [room_id, groups]
+                properties:
+                  room_id:
+                    type: string
+                    example: "!sefiuhWgwghwWgh:example.com"
+                  groups:
+                    $ref: "#/components/schemas/GroupList"
+        "207":
+          description: Group assignment to room complete, but not all users membership changes were successful.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [room_id, groups, details]
+                properties:
+                  room_id:
+                    type: string
+                    example: "!sefiuhWgwghwWgh:example.com"
+                  groups:
+                    $ref: "#/components/schemas/GroupList"
+                  details:
+                    $ref: "#/components/schemas/JoinLeaveErrors"
+
 
 components:
   securitySchemes:
@@ -190,3 +237,25 @@ components:
               items:
                 type: string
           description: The managed room metadata containing assigned groups.
+    JoinLeaveErrors:
+      type: object
+      description: Information on errors that occurred while changing membership in a room.
+      properties:
+        join_errors:
+          type: object
+          additionalProperties:
+            type: string
+          example:
+            "@alice:myserver.com": "User does not exist on this server"
+        leave_errors:
+          type: object
+          additionalProperties:
+            type: string
+          example:
+            "@charlie:myserver.com": "Failed to remove user from room"
+    GroupList:
+      type: array
+      description: A list of group IDs
+      items:
+        type: string
+      example: ["group1", "bobs_group"]

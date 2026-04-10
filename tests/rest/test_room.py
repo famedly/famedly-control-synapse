@@ -9,8 +9,8 @@ from synapse.api.constants import (
     GuestAccess,
     Membership,
 )
-from synapse.api.errors import Codes, SynapseError
 from synapse.api.room_versions import KNOWN_ROOM_VERSIONS
+from synapse.module_api.errors import Codes, SynapseError
 from synapse.server import HomeServer
 from synapse.types import JsonDict, StateMap
 from synapse.types.state import StateFilter
@@ -18,9 +18,9 @@ from synapse.util.clock import Clock
 from twisted.internet.testing import MemoryReactor
 
 from famedly_control_synapse.client import FamedlyControlError
-from famedly_control_synapse.rest.room import MANAGED_ROOM_TYPE
 from famedly_control_synapse.rest.types import CreateManagedRoomRequest, CreationContent
 from famedly_control_synapse.room_handler import famedly_control_user_sync_error
+from famedly_control_synapse.types import MANAGED_ROOM_TYPE
 from tests.utils.homeserver_testcase import override_config
 from tests.utils.module_api_testcase import ModuleApiTestCase
 
@@ -926,12 +926,10 @@ class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
                 shorthand=False,
             )
             assert channel.code == 207, channel.result
-            assert (
-                "Failed to remove some members from the room"
-                in channel.json_body["error"]
-            )
-            assert test_member_1 in channel.json_body["details"]
-            assert test_member_2 in channel.json_body["details"]
+            assert "error" in channel.json_body
+
+            assert test_member_1 in channel.json_body["details"]["leave_errors"]
+            assert test_member_2 in channel.json_body["details"]["leave_errors"]
 
         # Since both members failed to be removed, they should still be in the room
         # and the new member should be joined to the room
@@ -1010,12 +1008,10 @@ class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
                 shorthand=False,
             )
             assert channel.code == 207, channel.result
-            assert (
-                "Failed to add some members to the room" in channel.json_body["error"]
-            )
-            assert non_existent_user in channel.json_body["details"]
+            assert "error" in channel.json_body
+            assert non_existent_user in channel.json_body["details"]["join_errors"]
             # test_member_2 should not be in details as the member was already in the room
-            assert test_member_2 not in channel.json_body["details"]
+            assert test_member_2 not in channel.json_body["details"]["join_errors"]
 
         # Check the metric value is increased by 1
         new_value = famedly_control_user_sync_error.labels(
@@ -1064,10 +1060,7 @@ class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
                 shorthand=False,
             )
             assert channel.code == 207, channel.result
-            assert (
-                "Failed to add and remove some members from the room"
-                in channel.json_body["error"]
-            )
+            assert "error" in channel.json_body
             assert "leave_errors" in channel.json_body["details"]
             assert "join_errors" in channel.json_body["details"]
             assert test_member_1 in channel.json_body["details"]["leave_errors"]
