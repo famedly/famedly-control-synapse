@@ -2,7 +2,7 @@ from http import HTTPStatus
 from unittest.mock import AsyncMock, patch
 
 import parameterized
-from synapse.api.errors import Codes, SynapseError
+from synapse.module_api.errors import Codes, SynapseError
 from synapse.server import HomeServer
 from synapse.util.clock import Clock
 from twisted.internet.testing import MemoryReactor

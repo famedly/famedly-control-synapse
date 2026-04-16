@@ -12,12 +12,12 @@ from synapse.http.servlet import (
 )
 from synapse.http.site import SynapseRequest
 from synapse.module_api import ModuleApi
+from synapse.module_api.errors import Codes
 from synapse.types import JsonDict, RoomID
 
-from famedly_control_synapse.client import FamedlyControlClient, FamedlyControlError
+from famedly_control_synapse.client import FamedlyControlError
 from famedly_control_synapse.repository import ManagedRoomRepository
 from famedly_control_synapse.rest.types import (
-    MANAGED_ROOM_TYPE,
     AssignGroupsToManagedRoomRequest,
     CreateManagedRoomRequest,
 )
@@ -50,14 +50,11 @@ class CreateManagedRoomResource(RestServlet):
     def __init__(
         self,
         api: ModuleApi,
-        client: FamedlyControlClient,
         room_handler: ManagedRoomHandler,
         repository: ManagedRoomRepository,
     ) -> None:
         super().__init__()
         self.api = api
-        self.client = client
-        self.account_data_handler = self.api._account_data_handler
         self.room_handler = room_handler
         self.repository = repository
 
@@ -67,7 +64,7 @@ class CreateManagedRoomResource(RestServlet):
         admin_user_id = requester.user.to_string()
 
         if not await self.api.is_user_admin(admin_user_id):
-            return 403, {"error": "user is not administrator"}
+            raise FamedlyControlError(403, "User is not administrator", Codes.FORBIDDEN)
 
         room_config = parse_json_object_from_request(request)
 
@@ -83,13 +80,20 @@ class CreateManagedRoomResource(RestServlet):
             validation_error = [
                 {"loc": err.get("loc"), "msg": err.get("msg")} for err in e.errors()
             ]
-            return 400, {"error": "Invalid request body", "details": validation_error}
+            raise FamedlyControlError(
+                400,
+                "Invalid request body",
+                errcode=Codes.BAD_JSON,
+                additional_fields={"details": validation_error},
+            )
 
         room_version = KNOWN_ROOM_VERSIONS.get(validated_room_config.room_version)
         if room_version is None:
-            return 400, {
-                "error": f"Unsupported room version: {validated_room_config.room_version}"
-            }
+            raise FamedlyControlError(
+                400,
+                f"Unsupported room version: {validated_room_config.room_version}",
+                errcode=Codes.UNSUPPORTED_ROOM_VERSION,
+            )
 
         if not room_version.msc4289_creator_power_enabled:
             validated_room_config.power_level_content_override.users[admin_user_id] = (
@@ -101,47 +105,15 @@ class CreateManagedRoomResource(RestServlet):
             validated_room_config.model_dump(by_alias=True, exclude_none=True),
         )
 
-        await self.account_data_handler.add_account_data_to_room(
-            admin_user_id,
-            room_id,
-            MANAGED_ROOM_TYPE,
-            {"groups": validated_room_config.groups},
-        )
-
         await self.repository.initialize_sync_token(admin_user_id)
 
-        member_external_ids = set()
-        try:
-            for group_id in validated_room_config.groups:
-                members = await self.client.get_group_members(group_id)
-                member_external_ids.update(members)
-        except FamedlyControlError as e:
-            return e.code, {"error": e.msg}
-
-        user_mxids, not_founds = (
-            await self.room_handler.batch_convert_external_user_ids_to_matrix_user_ids(
-                list(member_external_ids)
-            )
+        # if there is a problem, or the members are only partially assigned, this will
+        # respond directly
+        await self.room_handler.assign_groups_to_room(
+            room_id, admin_user_id, validated_room_config.groups
         )
-        if not_founds:
-            return 400, {
-                "error": "Some external user IDs could not be mapped to Matrix user IDs",
-                "details": not_founds,
-            }
 
-        join_errors = await self.room_handler.force_join_users_to_room(
-            room_id, user_mxids, requester
-        )
-        if join_errors:
-            logger.warning(
-                "Some members failed to join room %s: %s", room_id, join_errors
-            )
-            return 207, {
-                "error": "Failed to add some members to the room",
-                "details": join_errors,
-            }
-
-        return 200, {"room_id": room_id}
+        return 200, {"room_id": room_id, "groups": validated_room_config.groups}
 
 
 class ListManagedRoomsResource(RestServlet):
@@ -160,7 +132,9 @@ class ListManagedRoomsResource(RestServlet):
         user_id = requester.user.to_string()
 
         if not await self.api.is_user_admin(user_id):
-            return 403, {"error": "user is not administrator"}
+            raise FamedlyControlError(
+                403, "User is not administrator", errcode=Codes.FORBIDDEN
+            )
 
         # The 'from' query parameter is labeled as a string in the openapi spec, but is
         # passed directly into the sql query which expects it to be an integer(for
@@ -199,14 +173,11 @@ class AssignGroupsToManagedRoomResource(RestServlet):
     def __init__(
         self,
         api: ModuleApi,
-        client: FamedlyControlClient,
         room_handler: ManagedRoomHandler,
         repository: ManagedRoomRepository,
     ) -> None:
         super().__init__()
         self.api = api
-        self.client = client
-        self.account_data_handler = self.api._account_data_handler
         self.room_handler = room_handler
         self.repository = repository
 
@@ -221,11 +192,16 @@ class AssignGroupsToManagedRoomResource(RestServlet):
         requester = await self.api.get_user_by_req(request)
         user_id = requester.user.to_string()
         if not await self.api.is_user_admin(user_id):
-            return 403, {"error": "user is not administrator"}
+            raise FamedlyControlError(
+                403, "User is not administrator", errcode=Codes.FORBIDDEN
+            )
 
         # Validate if it's a managed room
         if not await self.repository.is_managed_room(room_id, user_id):
-            return 404, {"error": "Room not found or not a managed room"}
+            # TODO: Different errcode here?
+            raise FamedlyControlError(
+                404, "Room not found or not a managed room", errcode=Codes.NOT_FOUND
+            )
 
         # Updated groups information from the request body
         try:
@@ -236,101 +212,17 @@ class AssignGroupsToManagedRoomResource(RestServlet):
             validation_error = [
                 {"loc": err.get("loc"), "msg": err.get("msg")} for err in e.errors()
             ]
-            return 400, {"error": "Invalid request body", "details": validation_error}
-
-        # Get the current members of the room
-        current_member_mxids = await self.api._store.get_users_in_room(room_id)
-        current_members = set(current_member_mxids)
-
-        # Get the new groups member state (desired state after update)
-        try:
-            expected_member_external_ids = set()
-            for group_id in validated_input.groups:
-                members = await self.client.get_group_members(group_id)
-                expected_member_external_ids.update(members)
-        except FamedlyControlError as e:
-            return e.code, {"error": e.msg}
-
-        expected_member_mxids, not_founds = (
-            await self.room_handler.batch_convert_external_user_ids_to_matrix_user_ids(
-                list(expected_member_external_ids)
+            raise FamedlyControlError(
+                400,
+                "Invalid request body",
+                errcode=Codes.BAD_JSON,
+                additional_fields={"details": validation_error},
             )
+
+        # if there is a problem, or the members are only partially assigned, this will
+        # respond directly
+        await self.room_handler.assign_groups_to_room(
+            room_id, user_id, validated_input.groups
         )
-        if not_founds:
-            return 400, {
-                "error": "Some external user IDs could not be mapped to Matrix user IDs",
-                "details": not_founds,
-            }
 
-        expected_members = set(expected_member_mxids)
-
-        # Calculate membership changes
-        members_to_add = expected_members - current_members
-        members_to_remove = current_members - expected_members
-
-        # Prevent the room creator/admin from the membership changes.
-        room_creator = await self.room_handler.get_room_creator(room_id)
-        if room_creator:
-            members_to_add.discard(room_creator)
-            members_to_remove.discard(room_creator)
-        members_to_add.discard(user_id)
-        members_to_remove.discard(user_id)
-
-        # Apply membership changes
-        result = await self.room_handler.apply_membership_changes(
-            room_id, user_id, list(members_to_add), list(members_to_remove)
-        )
-        if result.leave_errors:
-            logger.error(
-                "Some members failed to leave room %s: %s",
-                room_id,
-                result.leave_errors,
-            )
-        if result.join_errors:
-            logger.error(
-                "Some members failed to join room %s: %s",
-                room_id,
-                result.join_errors,
-            )
-
-        # Update room account data with new groups information
-        await self.update_room_account_data(user_id, room_id, validated_input.groups)
-
-        if result.join_errors and result.leave_errors:
-            return 207, {
-                "error": "Failed to add and remove some members from the room",
-                "details": {
-                    "join_errors": result.join_errors,
-                    "leave_errors": result.leave_errors,
-                },
-            }
-        elif result.leave_errors:
-            return 207, {
-                "error": "Failed to remove some members from the room",
-                "details": result.leave_errors,
-            }
-        elif result.join_errors:
-            return 207, {
-                "error": "Failed to add some members to the room",
-                "details": result.join_errors,
-            }
         return 200, {"room_id": room_id, "groups": validated_input.groups}
-
-    async def update_room_account_data(
-        self, user_id: str, room_id: str, groups: list[str]
-    ) -> None:
-        """Helper method to update the room account data for a user."""
-        try:
-            await self.account_data_handler.remove_account_data_for_room(
-                user_id, room_id, MANAGED_ROOM_TYPE
-            )
-            await self.account_data_handler.add_account_data_to_room(
-                user_id,
-                room_id,
-                MANAGED_ROOM_TYPE,
-                {"groups": groups},
-            )
-        except Exception as e:
-            logger.exception(
-                "Failed to update account data for room %s: %s", room_id, e
-            )

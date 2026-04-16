@@ -24,7 +24,7 @@ from urllib.parse import urlencode
 
 import attr
 from synapse.api.constants import Membership
-from synapse.api.errors import Codes
+from synapse.module_api.errors import Codes
 from synapse.server import HomeServer
 from synapse.types import JsonDict
 from twisted.internet.testing import MemoryReactorClock

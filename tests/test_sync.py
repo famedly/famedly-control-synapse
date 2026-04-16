@@ -49,6 +49,7 @@ class TestGroupMembershipSync(ModuleApiTestCase):
                 room_alias_name=f"sync_room_{self._room_counter + 1}",
                 name=name,
                 groups=groups,
+                room_version=self.hs.config.server.default_room_version.identifier,
             )
             self._room_counter += 1
             channel = self.make_request(

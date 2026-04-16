@@ -3,12 +3,15 @@ from dataclasses import dataclass, field
 
 from prometheus_client import Counter
 from synapse.api.constants import EventContentFields, EventTypes, Membership
-from synapse.api.errors import Codes, UnstableSpecAuthError
+from synapse.api.errors import UnstableSpecAuthError
 from synapse.events import EventBase
 from synapse.module_api import ModuleApi
-from synapse.types import Requester, StateMap, create_requester
+from synapse.module_api.errors import Codes
+from synapse.types import JsonDict, Requester, StateMap, create_requester
 
+from famedly_control_synapse.client import FamedlyControlClient, FamedlyControlError
 from famedly_control_synapse.config import FamedlyControlConfig
+from famedly_control_synapse.types import MANAGED_ROOM_TYPE
 
 logger = logging.getLogger(__name__)
 
@@ -37,9 +40,13 @@ class MembershipChangeResult:
 
 
 class ManagedRoomHandler:
-    def __init__(self, api: ModuleApi, config: FamedlyControlConfig):
+    def __init__(
+        self, api: ModuleApi, config: FamedlyControlConfig, client: FamedlyControlClient
+    ):
         self.api = api
         self.config = config
+        self.client = client
+        self.account_data_handler = self.api._hs.get_account_data_handler()
         self.server_name = api.server_name
 
     def increment_error_count(self, error_code: str) -> None:
@@ -306,29 +313,108 @@ class ManagedRoomHandler:
 
         return result, not_found_ids
 
-    async def get_room_creator(self, room_id: str) -> str | None:
+    async def get_room_creator(self, room_id: str) -> str:
         """Get the room creator from the m.room.create event.
 
         Args:
             room_id: The room ID to get the creator for.
 
         Returns:
-            The Matrix user ID of the room creator, or None if not found.
+            The Matrix user ID of the room creator.
         """
-        try:
-            state_map = await self.api.get_room_state(
-                room_id=room_id, event_filter=[CREATE_EVENT_FILTER]
+        state_map = await self.api.get_room_state(
+            room_id=room_id, event_filter=[CREATE_EVENT_FILTER]
+        )
+        create_event = state_map.get(CREATE_EVENT_FILTER)
+        if not create_event:
+            logger.warning(
+                "Failed to get room creator for %s: Creation event not found", room_id
             )
-            create_event = state_map.get(CREATE_EVENT_FILTER)
-            if create_event:
-                # Room versions ≤10 have explicit creator field
-                creator_from_content = create_event.content.get("creator")
-                # Room versions 11+ use sender
-                sender = create_event.sender
-                return creator_from_content or sender
-        except Exception as e:
-            logger.warning("Failed to get room creator for %s: %s", room_id, e)
-        return None
+            raise FamedlyControlError(
+                500, f"Create event not found for room: {room_id}"
+            )
+        # Room versions ≤10 have explicit creator field
+        creator_from_content = create_event.content.get("creator")
+        # Room versions 11+ use sender. In theory they should both be the same and
+        # only the sender is guaranteed in both spots
+        sender = create_event.sender
+        return creator_from_content or sender
+
+    async def assign_groups_to_room(
+        self, room_id: str, admin_user: str, list_of_groups: list[str]
+    ) -> None:
+        # Update room account data with new groups information
+        await self.account_data_handler.add_account_data_to_room(
+            admin_user,
+            room_id,
+            MANAGED_ROOM_TYPE,
+            {"groups": list_of_groups},
+        )
+
+        # Get the current members of the room
+        current_member_mxids = await self.api._store.get_users_in_room(room_id)
+        current_members = set(current_member_mxids)
+
+        # Get the new groups member state (desired state after update)
+        try:
+            expected_member_external_ids = set()
+            for group_id in list_of_groups:
+                members = await self.client.get_group_members(group_id)
+                expected_member_external_ids.update(members)
+        except FamedlyControlError as e:
+            raise FamedlyControlError(e.code, e.msg)
+
+        expected_member_mxids, not_founds = (
+            await self.batch_convert_external_user_ids_to_matrix_user_ids(
+                list(expected_member_external_ids)
+            )
+        )
+        if not_founds:
+            raise FamedlyControlError(
+                400,
+                "Some external user IDs could not be mapped to Matrix user IDs",
+                additional_fields={
+                    "details": not_founds,
+                },
+            )
+
+        expected_members = set(expected_member_mxids)
+
+        # Calculate membership changes
+        members_to_add = expected_members - current_members
+        members_to_remove = current_members - expected_members
+
+        # Prevent the room creator/admin from the membership changes.
+        room_creator = await self.get_room_creator(room_id)
+        if room_creator:
+            members_to_add.discard(room_creator)
+            members_to_remove.discard(room_creator)
+        members_to_add.discard(admin_user)
+        members_to_remove.discard(admin_user)
+
+        # Apply membership changes
+        result = await self.apply_membership_changes(
+            room_id, admin_user, list(members_to_add), list(members_to_remove)
+        )
+
+        if result.join_errors or result.leave_errors:
+            additional_fields: JsonDict = {
+                "room_id": room_id,
+                "groups": list_of_groups,
+            }
+            # Be selective about what is added to the response. If there were no leave
+            # errors for example, then there is no sense having the empty object
+            detail_field = additional_fields.setdefault("details", dict())
+            if result.join_errors:
+                detail_field["join_errors"] = result.join_errors
+            if result.leave_errors:
+                detail_field["leave_errors"] = result.leave_errors
+
+            raise FamedlyControlError(
+                207,
+                "Failed to add and/or remove some members from the room",
+                additional_fields=additional_fields,
+            )
 
 
 def get_membership_for_user(mxid: str, state_map: StateMap[EventBase]) -> str:

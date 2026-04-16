@@ -4,7 +4,7 @@ from synapse.module_api import ModuleApi
 from synapse.storage.engines import PostgresEngine
 from synapse.types import JsonDict
 
-from famedly_control_synapse.rest.types import MANAGED_ROOM_TYPE, SYNC_TOKEN_TYPE
+from famedly_control_synapse.types import MANAGED_ROOM_TYPE, SYNC_TOKEN_TYPE
 
 
 class ManagedRoomRepository:

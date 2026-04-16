@@ -198,6 +198,7 @@ class TestCreateManagedRoomRequest(TestCase):
             "name": "Test Room",
             "power_level_content_override": None,
             "groups": ["testgroup"],
+            "room_version": "",
         }
 
         with pytest.raises(ValidationError):
@@ -216,6 +217,7 @@ class TestCreateManagedRoomRequest(TestCase):
             "name": "Test Room",
             "power_level_content_override": {},
             "groups": [],
+            "room_version": "",
         }
 
         req = CreateManagedRoomRequest.model_validate(
@@ -249,6 +251,7 @@ class TestCreateManagedRoomRequest(TestCase):
             "name": "Test Room",
             "power_level_content_override": {"events": {EventTypes.Message: 10}},
             "groups": [],
+            "room_version": "",
         }
 
         req = CreateManagedRoomRequest.model_validate(
@@ -289,6 +292,7 @@ class TestCreateManagedRoomRequest(TestCase):
                 "events": {EventTypes.Message: 10, EventTypes.JoinRules: 100}
             },
             "groups": [],
+            "room_version": "",
         }
 
         # Since one of the event types is protected, this should error
@@ -306,6 +310,7 @@ class TestCreateManagedRoomRequest(TestCase):
             "name": "Test Room",
             "power_level_content_override": {"users": {"@alice:example.com": 100}},
             "groups": ["testgroup"],
+            "room_version": "",
         }
 
         req = CreateManagedRoomRequest.model_validate(
@@ -331,6 +336,7 @@ class TestCreateManagedRoomRequest(TestCase):
             "name": "Test Room",
             "power_level_content_override": {"users": {"@alice:example.com": 100}},
             "groups": ["testgroup"],
+            "room_version": "",
         }
 
         # Note that the context is not added here. That data is needed to validate that
