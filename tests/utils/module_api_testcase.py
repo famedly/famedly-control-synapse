@@ -108,6 +108,7 @@ class ModuleApiTestCase(synapsetest.HomeserverTestCase):
                         },
                         "auth_provider": "https://idp.example.com/",
                         "sync_enabled": False,
+                        "error_retry_queue_enabled": False,
                     },
                 }
             ]
@@ -137,10 +138,9 @@ class ModuleApiTestCase(synapsetest.HomeserverTestCase):
             name=name,
             room_version="12",
             topic=f"Topic for {name}",
-            groups=["test_group"],
+            groups=groups or [],
         )
-        if groups:
-            config.groups = groups
+
         channel = self.make_request(
             method="POST",
             path=self.CREATE_PATH,

@@ -78,21 +78,6 @@ paths:
                     example: "!sefiuhWgwghwWgh:example.com"
                   groups:
                     $ref: "#/components/schemas/GroupList"
-        "207":
-          description: Room created successfully, but not all users could be joined.
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [room_id, groups, details]
-                properties:
-                  room_id:
-                    type: string
-                    example: "!sefiuhWgwghwWgh:example.com"
-                  groups:
-                    $ref: "#/components/schemas/GroupList"
-                  details:
-                    $ref: "#/components/schemas/JoinLeaveErrors"
 
         "400":
           description: The request is invalid. A meaningful errcode and description error text will be returned.
@@ -184,22 +169,6 @@ paths:
                     example: "!sefiuhWgwghwWgh:example.com"
                   groups:
                     $ref: "#/components/schemas/GroupList"
-        "207":
-          description: Group assignment to room complete, but not all users membership changes were successful.
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [room_id, groups, details]
-                properties:
-                  room_id:
-                    type: string
-                    example: "!sefiuhWgwghwWgh:example.com"
-                  groups:
-                    $ref: "#/components/schemas/GroupList"
-                  details:
-                    $ref: "#/components/schemas/JoinLeaveErrors"
-
 
 components:
   securitySchemes:

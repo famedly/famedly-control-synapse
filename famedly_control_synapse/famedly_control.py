@@ -66,12 +66,17 @@ class FamedlyControl:
         self.clock = api._hs.get_clock()
         self.config = config
         self.client = FamedlyControlClient(self.api, config)
-        self.room_handler = ManagedRoomHandler(self.api, self.config, self.client)
         self.repository = ManagedRoomRepository(api)
+        self.room_handler = ManagedRoomHandler(
+            self.api, self.config, self.client, self.repository
+        )
 
         if self.api.should_run_background_tasks():
             self.syncer = GroupMembershipSyncer(
                 api, self.client, self.room_handler, self.repository, config
+            )
+            self.api._hs.get_clock().call_when_running(
+                self.room_handler._load_queue_snapshot
             )
 
             # Register servlets
@@ -145,6 +150,15 @@ class FamedlyControl:
         membership = event.content.get("membership")
         if membership == Membership.JOIN:
             return True, None
+
+        if membership == Membership.LEAVE:
+            # Leave events where the sender is the target should only be allowed when
+            # deactivating the user
+            if (
+                event.sender == event.state_key
+                and await self.api._store.get_user_deactivated_status(event.sender)
+            ):
+                return True, None
 
         raise SynapseError(
             403,

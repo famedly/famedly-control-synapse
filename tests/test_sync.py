@@ -371,8 +371,8 @@ class TestGroupMembershipSync(ModuleApiTestCase):
         "famedly_control_synapse.client.FamedlyControlClient.get_all_groups_diffs",
         new_callable=AsyncMock,
     )
-    def test_sync_does_not_advance_token_on_failure(self, mock_get_diffs) -> None:
-        """Sync token should NOT advance if membership updates fail."""
+    def test_sync_handles_unknown_user(self, mock_get_diffs) -> None:
+        """Sync token can advance if membership updates fail."""
         self._create_managed_room_for_sync(groups=["group_d"])
 
         self.syncer._sync_token = "5"
@@ -394,7 +394,7 @@ class TestGroupMembershipSync(ModuleApiTestCase):
         ):
             self.get_success(self.syncer._process_sync())
 
-        assert self.syncer._sync_token == "5"
+        assert self.syncer._sync_token == "10"
 
     @patch(
         "famedly_control_synapse.client.FamedlyControlClient.get_all_groups_diffs",
