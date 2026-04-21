@@ -112,6 +112,9 @@ class GroupMembershipSyncer:
             sync=self._sync_token, timeout=self.polling_interval_seconds
         )
 
+        if response.next_sync == self._sync_token:
+            return
+
         sync_succeeded = True
 
         if response.data:
