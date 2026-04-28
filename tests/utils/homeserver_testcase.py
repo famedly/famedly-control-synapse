@@ -305,6 +305,7 @@ class HomeserverTestCase(TestCase):
         # see if we have any additional config for this test
         method = getattr(self, methodName)
         self._extra_config = getattr(method, "_extra_config", None)
+        self._extra_module_config = getattr(method, "_extra_module_config", None)
 
     def setUp(self) -> None:
         """
@@ -564,6 +565,10 @@ class HomeserverTestCase(TestCase):
         kwargs = dict(kwargs)
         kwargs.update(self._hs_args)
         config = self.default_config() if "config" not in kwargs else kwargs["config"]
+        # Do this after the primary base test config is generated, that way selective
+        # values can be overridden
+        if self._extra_module_config is not None:
+            config["modules"][0]["config"].update(self._extra_module_config)
 
         # The server name can be specified using either the `name` argument or a config
         # override. The `name` argument takes precedence over any config overrides.

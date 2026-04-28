@@ -15,7 +15,7 @@
 # from jwcrypto import jwe, jwk, jwt
 import logging
 from http import HTTPStatus
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, Callable, ClassVar, TypeVar
 
 from synapse.rest import admin
 from synapse.rest.client import (
@@ -28,7 +28,7 @@ from synapse.rest.client import (
     room_upgrade_rest_servlet,
 )
 from synapse.server import HomeServer
-from synapse.types import UserID, create_requester
+from synapse.types import JsonDict, UserID, create_requester
 from synapse.util.clock import Clock
 from twisted.internet.testing import MemoryReactor
 
@@ -61,6 +61,7 @@ class ModuleApiTestCase(synapsetest.HomeserverTestCase):
 
     servlets: ClassVar[list] = [
         admin.register_servlets,
+        admin.register_servlets_for_client_rest_resource,
         account_data.register_servlets,
         login.register_servlets,
         room.register_servlets,
@@ -205,3 +206,32 @@ class ModuleApiTestCase(synapsetest.HomeserverTestCase):
                 },
             )
         )
+
+
+TV = TypeVar("TV")
+
+
+def override_module_config(extra_module_config: JsonDict) -> Callable[[TV], TV]:
+    """A decorator which can be applied to test functions to adjust module configuration
+    without overwriting an entire module's boilerplate configuration.
+
+    For use
+
+    For example:
+
+        class MyTestCase(HomeserverTestCase):
+            @override_module_config({"sync_enabled": False, ...})
+            def test_foo(self):
+                ...
+
+    Args:
+        extra_module_config: Additional config settings to be merged into the module
+            config dict before instantiating the test homeserver.
+    """
+
+    def decorator(func: TV) -> TV:
+        # This attribute is being defined.
+        func._extra_module_config = extra_module_config  # type: ignore[attr-defined]
+        return func
+
+    return decorator
