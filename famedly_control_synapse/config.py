@@ -48,6 +48,20 @@ class FamedlyControlConfig(BaseModel):
         ge=1,
         description="Delay in seconds before retrying after a sync failure",
     )
+    error_retry_queue_enabled: bool = Field(
+        default=True,
+        description="Enable retrying membership changes that previously errored",
+    )
+    error_retry_queue_interval_seconds: int = Field(
+        default=30,
+        ge=1,
+        description="Delay in seconds before attempting a membership adjustment from the error retry queue",
+    )
+    error_retry_queue_log_after_retry_count: int = Field(
+        default=3,
+        ge=1,
+        description="The count of error retry queue attempts to start logging warnings",
+    )
     auth_provider: str = Field(
         ...,
         description="The unique, internal ID of the external identity provider, used in the database to link external user IDs to Matrix user IDs",

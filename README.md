@@ -20,6 +20,8 @@ This repository contains a [Synapse](https://github.com/famedly/synapse) module 
 
 The openapi specification is available at [openapi-spec.yaml](openapi-spec.yaml). You can use tools like [swagger.io](https://editor.swagger.io/) for a more readable format.
 
+Note for users being deactivated: Highly recommended to remove a user from a group before it is deactivated. Upon deactivation, the user will be removed from the room regardless of any group. If the user should be reactivated in the future, it will not automatically re-join any rooms its groups are in.
+
 ### Worker routing
 
 The HTTP endpoints exposed by this module are only registered on the background task synapse worker (or the main process if no dedicated worker is configured). Requests to these endpoints on any other worker will return `404 NOT_FOUND`.
@@ -46,6 +48,9 @@ modules:
           access_token: str = "", # Access token to authenticate against famedly control
         sync_enabled: bool = true, # Whether to run the background group membership sync loop
         sync_polling_interval_seconds: int = 30, # Interval in seconds between polling requests
+        error_retry_queue_enabled: bool = true, # Enable retrying membership changes that previously errored
+        error_retry_queue_interval_seconds: int = 30, # Interval in seconds between retrying a failed membership change
+        error_retry_queue_log_after_retry_count: int = 3, # The count of error retry queue attempts to start logging warnings
         auth_provider: str = "", # The unique, internal ID of the external identity provider.
 ```
 

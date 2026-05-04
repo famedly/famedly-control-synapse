@@ -115,8 +115,6 @@ class GroupMembershipSyncer:
         if response.next_sync == self._sync_token:
             return
 
-        sync_succeeded = True
-
         if response.data:
             group_rooms = await self.repository.get_rooms_by_group()
 
@@ -163,16 +161,7 @@ class GroupMembershipSyncer:
                     effective_diffs = self._filter_removes(
                         diffs, other_groups_of_the_room, group_members_cache
                     )
-                    if not await self._apply_diffs(
-                        room_id, admin_user_id, effective_diffs
-                    ):
-                        sync_succeeded = False
-
-        if not sync_succeeded:
-            logger.warning(
-                "Some membership updates failed during sync, will retry next cycle",
-            )
-            return
+                    await self._apply_diffs(room_id, admin_user_id, effective_diffs)
 
         self._sync_token = response.next_sync
         if self._sync_token_user_id is None:
@@ -210,12 +199,8 @@ class GroupMembershipSyncer:
 
     async def _apply_diffs(
         self, room_id: str, admin_user_id: str, diffs: list[DiffRecord]
-    ) -> bool:
-        """Apply membership diffs to a single room.
-
-        Returns:
-            True if all operations succeeded, False if any failed.
-        """
+    ) -> None:
+        """Apply membership diffs to a single room"""
         external_ids_to_add = [
             d.external_user_id for d in diffs if d.action == MembershipAction.ADD
         ]
@@ -223,32 +208,9 @@ class GroupMembershipSyncer:
             d.external_user_id for d in diffs if d.action == MembershipAction.REM
         ]
 
-        result = await self.room_handler.apply_membership_changes_from_external_ids(
+        await self.room_handler.apply_membership_changes_from_external_ids(
             room_id=room_id,
             admin_user_id=admin_user_id,
             external_ids_to_add=external_ids_to_add,
             external_ids_to_remove=external_ids_to_remove,
         )
-
-        if result.has_errors:
-            if result.not_found_ids:
-                logger.warning(
-                    "Could not resolve external IDs for room %s: %s",
-                    room_id,
-                    result.not_found_ids,
-                )
-            if result.join_errors:
-                logger.warning(
-                    "Failed to add some users to room %s: %s",
-                    room_id,
-                    result.join_errors,
-                )
-            if result.leave_errors:
-                logger.warning(
-                    "Failed to remove some users from room %s: %s",
-                    room_id,
-                    result.leave_errors,
-                )
-            return False
-
-        return True

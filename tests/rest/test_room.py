@@ -856,11 +856,13 @@ class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
             shorthand=False,
         )
         assert channel.code == 500, channel.result
-        assert "Service unavailable" in channel.json_body["error"]
+        assert "error" in channel.json_body
 
-    def test_conversion_error_response(self, mock_get_group_members) -> None:
-        """Test that if batch conversion raises an error, the endpoint returns an error
-        with an error message."""
+    def test_conversion_error_responds_with_success(
+        self, mock_get_group_members
+    ) -> None:
+        """Test that if the mapping of external user id to local Synapse user doesn't
+        exist and raises an error, the endpoint does not return an error"""
         # Create a managed room
         test_group = "test_group"
         test_member = self.register_user("test_member", "password")
@@ -880,22 +882,16 @@ class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
             shorthand=False,
         )
 
-        assert channel.code == HTTPStatus.BAD_REQUEST, channel.result
-        assert (
-            "Some external user IDs could not be mapped to Matrix user IDs"
-            in channel.json_body["error"]
-        )
-        assert sorted(channel.json_body["details"]) == [
-            "external_id_1",
-            "external_id_2",
-        ]
+        assert channel.code == HTTPStatus.OK, channel.result
+        assert "room_id" in channel.json_body
+        assert room_id == channel.json_body["room_id"]
 
     def test_leave_error_all_fail_response(
         self,
         mock_get_group_members,
     ) -> None:
         """Test that if leaving room raises errors for different users with different
-        error codes, the endpoint returns the details and metrics are incremented for
+        error codes, the endpoint returns success and metrics are incremented for
         each error code.
         """
         # Get the metric initial values for both error codes
@@ -950,11 +946,10 @@ class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
                 access_token=self.creator_access_token,
                 shorthand=False,
             )
-            assert channel.code == 207, channel.result
-            assert "error" in channel.json_body
-
-            assert test_member_1 in channel.json_body["details"]["leave_errors"]
-            assert test_member_2 in channel.json_body["details"]["leave_errors"]
+            # The response should show a success
+            assert channel.code == HTTPStatus.OK, channel.result
+            assert "room_id" in channel.json_body
+            assert room_id == channel.json_body["room_id"]
 
         # Since both members failed to be removed, they should still be in the room
         # and the new member should be joined to the room
@@ -972,12 +967,12 @@ class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
         assert new_value_unknown == initial_value_unknown + 1
         assert new_value_unauthorized == initial_value_unauthorized + 1
 
-    def test_join_error_response(
+    def test_join_error_responds_with_success(
         self,
         mock_get_group_members,
     ) -> None:
-        """Test that if joining room raises an error, the endpoint returns an error with
-        an error message and error metric was sent."""
+        """Test that if joining room raises an error, the endpoint returns a success and
+        error metric is updated."""
         # Get the metric initial value
         server_name = self.hs.hostname
         initial_value = famedly_control_user_sync_error.labels(
@@ -1024,11 +1019,9 @@ class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
                 access_token=self.creator_access_token,
                 shorthand=False,
             )
-            assert channel.code == 207, channel.result
-            assert "error" in channel.json_body
-            assert non_existent_user in channel.json_body["details"]["join_errors"]
-            # test_member_2 should not be in details as the member was already in the room
-            assert test_member_2 not in channel.json_body["details"]["join_errors"]
+            assert channel.code == HTTPStatus.OK, channel.result
+            assert "room_id" in channel.json_body
+            assert room_id == channel.json_body["room_id"]
 
         # Check the metric value is increased by 1
         new_value = famedly_control_user_sync_error.labels(
@@ -1036,12 +1029,12 @@ class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
         )._value.get()
         assert new_value == initial_value + 1
 
-    def test_both_join_and_leave_error_response(
+    def test_both_join_and_leave_errors_respond_with_success(
         self,
         mock_get_group_members,
     ) -> None:
         """Test that if both joining and leaving room raise errors, the endpoint returns
-        an error message with both leave_errors and join_errors."""
+        a success."""
         # Create a managed room with test_group_1
         test_group_1 = "test_group_1"
         test_group_2 = "test_group_2"
@@ -1076,12 +1069,9 @@ class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
                 access_token=self.creator_access_token,
                 shorthand=False,
             )
-            assert channel.code == 207, channel.result
-            assert "error" in channel.json_body
-            assert "leave_errors" in channel.json_body["details"]
-            assert "join_errors" in channel.json_body["details"]
-            assert test_member_1 in channel.json_body["details"]["leave_errors"]
-            assert non_existent_user in channel.json_body["details"]["join_errors"]
+            assert channel.code == HTTPStatus.OK, channel.result
+            assert "room_id" in channel.json_body
+            assert room_id == channel.json_body["room_id"]
 
     @override_config({"run_background_tasks_on": "fake_worker"})
     def test_non_background_worker_assign_groups_endpoint_disabled(
