@@ -830,6 +830,31 @@ class RetryQueueTestCase(ModuleApiTestCase):
             not_in_member_ids=[self.base_room_member, external_user_id],
         )
 
+        in_mem_managed_room_model = self.room_handler.retry_queue
+        assert room_id in in_mem_managed_room_model.rooms
+        assert external_user_id in in_mem_managed_room_model.rooms[room_id].external_ids
+        assert (
+            in_mem_managed_room_model.rooms[room_id]
+            .external_ids[external_user_id]
+            .retry_count
+            == 0
+        )
+
+        # Poke the retry queue process manually, so don't have to wait and to guarantee
+        # the loop doesn't run and catch us unaware. Then, check the in-memory retry
+        # queue. The external user should still be present and the attempts counter
+        # should be at 1.
+        self.get_success(self.room_handler.process_retry_queue(self.creator))
+        in_mem_managed_room_model = self.room_handler.retry_queue
+        assert room_id in in_mem_managed_room_model.rooms
+        assert external_user_id in in_mem_managed_room_model.rooms[room_id].external_ids
+        assert (
+            in_mem_managed_room_model.rooms[room_id]
+            .external_ids[external_user_id]
+            .retry_count
+            == 1
+        )
+
         # Create missing user now
         user_2_mxid = self.register_user("retry-loop-friend", "password")
         self.login("retry-loop-friend", "password")
