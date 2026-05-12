@@ -103,6 +103,49 @@ paths:
           schema:
             type: integer
           description: The maximum number of results to return.
+        - in: query
+          name: search_term
+          schema:
+            type: string
+          description: >
+            Filter rooms by room ID, name, or canonical alias.
+            Room ID matching is case-sensitive and full match.
+            Name and canonical alias matching is case-insensitive and substring match.
+            Only one search term is supported at a time.
+        - in: query
+          name: managed_room_group_id
+          schema:
+            type: string
+          description: >
+            Filter rooms by a specific group ID present in the managed room account data.
+            Only one group ID is supported at a time.
+        - in: query
+          name: order_by
+          schema:
+            type: string
+            enum:
+              - name
+              - canonical_alias
+              - joined_members
+              - joined_local_members
+              - guest_access
+              - history_visibility
+              - join_rules
+              - encryption
+              - federatable
+              - public
+              - state_events
+              - version
+              - creator
+            default: name
+          description: The field to order results by.
+        - in: query
+          name: dir
+          schema:
+            type: string
+            enum: [f, b]
+            default: f
+          description: Sort direction. 'f' for ascending (forward), 'b' for descending (backward).
       responses:
         "200":
           description: A list of managed rooms.
@@ -123,6 +166,8 @@ paths:
                     description: A pagination token that allows fetching previous results. The absence of this token means there are no results before this batch, i.e. this is the first batch.
                   total_room_count_estimate:
                     type: integer
+        "400":
+          description: Invalid query parameter. Returned when `order_by` or `dir` have an unrecognised value, or `from` is not a valid integer.
         "401":
           description: Invalid or missing access token.
         "403":

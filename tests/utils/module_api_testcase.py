@@ -133,8 +133,9 @@ class ModuleApiTestCase(synapsetest.HomeserverTestCase):
         At the moment requires mock for the get_group_members
         Returns room ID of the created room."""
         self._room_counter += 1
+        alias_name = f"test_room_{self._room_counter}"
         config = CreateManagedRoomRequest(
-            room_alias_name=f"test_room_{self._room_counter}",
+            room_alias_name=alias_name,
             name=name,
             room_version="12",
             topic=f"Topic for {name}",
@@ -149,7 +150,22 @@ class ModuleApiTestCase(synapsetest.HomeserverTestCase):
             shorthand=False,
         )
         assert channel.code == HTTPStatus.OK, channel.result
-        return channel.json_body["room_id"]
+        room_id = channel.json_body["room_id"]
+
+        # Synapse's stats handler runs as a background task and may not fire
+        # synchronously in tests, leaving room_stats_state empty. Populate it
+        # explicitly so that tests relying on name/alias search or ordering work.
+        self.get_success(
+            self.store.update_room_state(
+                room_id,
+                {
+                    "name": name,
+                    "canonical_alias": f"#{alias_name}:{self.server_name_for_this_server}",
+                },
+            )
+        )
+
+        return room_id
 
     def register_user(
         self,

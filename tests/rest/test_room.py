@@ -1236,3 +1236,275 @@ class TestListManagedRooms(ModuleApiTestCase):
             shorthand=False,
         )
         assert channel.code == HTTPStatus.NOT_FOUND, channel.result
+
+    def test_list_search_term_by_name(self, mock_get_group_members) -> None:
+        """search_term matches rooms by name substring."""
+        self._create_managed_room(name="Alpha Room")
+        self._create_managed_room(name="Beta Room")
+        self._create_managed_room(name="Gamma Room")
+        self._create_managed_room(name="#special Room")
+
+        channel = self.make_request(
+            method="GET",
+            path=f"{self.LIST_PATH}?search_term=Beta",
+            access_token=self.creator_access_token,
+            shorthand=False,
+        )
+        assert channel.code == HTTPStatus.OK, channel.result
+        assert channel.json_body["total_room_count_estimate"] == 1
+        assert len(channel.json_body["chunk"]) == 1
+        assert channel.json_body["chunk"][0]["name"] == "Beta Room"
+
+        # Names starting with '#' are matched literally, not treated as alias sigil
+        channel = self.make_request(
+            method="GET",
+            path=f"{self.LIST_PATH}?search_term=%23special",
+            access_token=self.creator_access_token,
+            shorthand=False,
+        )
+        assert channel.code == HTTPStatus.OK, channel.result
+        assert channel.json_body["total_room_count_estimate"] == 1
+        assert channel.json_body["chunk"][0]["name"] == "#special Room"
+
+    def test_list_search_term_case_insensitive(self, mock_get_group_members) -> None:
+        """search_term is case-insensitive."""
+        self._create_managed_room(name="Alpha Room")
+        self._create_managed_room(name="Beta Room")
+
+        channel = self.make_request(
+            method="GET",
+            path=f"{self.LIST_PATH}?search_term=alpha",
+            access_token=self.creator_access_token,
+            shorthand=False,
+        )
+        assert channel.code == HTTPStatus.OK, channel.result
+        assert channel.json_body["total_room_count_estimate"] == 1
+        assert channel.json_body["chunk"][0]["name"] == "Alpha Room"
+
+    def test_list_search_term_by_alias(self, mock_get_group_members) -> None:
+        """search_term matches rooms by canonical alias.
+
+        _create_managed_room sets room_alias_name=test_room_{N}, so the canonical
+        alias becomes #test_room_{N}:testserver.com.
+        """
+        # Capture the counter before creating rooms so we can predict the alias assigned.
+        start = self._room_counter
+        self._create_managed_room(name="First")
+        n = start + 1
+        alias_localpart = f"test_room_{n}"
+        full_alias = f"#{alias_localpart}:{self.server_name_for_this_server}"
+
+        self._create_managed_room(name="Second")
+        self._create_managed_room(name="Third")
+
+        # All of these should uniquely identify "First"
+        for search_term in [
+            alias_localpart,  # bare localpart: test_room_N
+            f"#{alias_localpart}",  # with sigil, no domain: #test_room_N
+            full_alias,  # full canonical alias: #test_room_N:testserver.com
+        ]:
+            channel = self.make_request(
+                method="GET",
+                path=f"{self.LIST_PATH}?search_term={search_term}",
+                access_token=self.creator_access_token,
+                shorthand=False,
+            )
+            assert channel.code == HTTPStatus.OK, channel.result
+            assert channel.json_body["total_room_count_estimate"] == 1, search_term
+            assert channel.json_body["chunk"][0]["name"] == "First", search_term
+
+        # Domain-only matches all three rooms since they all share the same server
+        channel = self.make_request(
+            method="GET",
+            path=f"{self.LIST_PATH}?search_term={self.server_name_for_this_server}",
+            access_token=self.creator_access_token,
+            shorthand=False,
+        )
+        assert channel.code == HTTPStatus.OK, channel.result
+        assert channel.json_body["total_room_count_estimate"] == 3
+
+    def test_list_search_term_by_room_id(self, mock_get_group_members) -> None:
+        """search_term matches rooms by exact room_id."""
+        room_id = self._create_managed_room(name="Findable Room")
+        self._create_managed_room(name="Other Room")
+
+        channel = self.make_request(
+            method="GET",
+            path=f"{self.LIST_PATH}?search_term={room_id}",
+            access_token=self.creator_access_token,
+            shorthand=False,
+        )
+        assert channel.code == HTTPStatus.OK, channel.result
+        assert channel.json_body["total_room_count_estimate"] == 1
+        assert channel.json_body["chunk"][0]["room_id"] == room_id
+
+    def test_list_search_term_no_match(self, mock_get_group_members) -> None:
+        """search_term with no matching rooms returns an empty chunk."""
+        self._create_managed_room(name="Alpha Room")
+
+        channel = self.make_request(
+            method="GET",
+            path=f"{self.LIST_PATH}?search_term=nomatch",
+            access_token=self.creator_access_token,
+            shorthand=False,
+        )
+        assert channel.code == HTTPStatus.OK, channel.result
+        assert channel.json_body["total_room_count_estimate"] == 0
+        assert channel.json_body["chunk"] == []
+
+    def test_list_filter_by_group_id(self, mock_get_group_members) -> None:
+        """managed_room_group_id returns only rooms that belong to that group."""
+        mock_get_group_members.return_value = []
+        self._create_managed_room(name="Group A Room", groups=["group_a"])
+        self._create_managed_room(name="Group B Room", groups=["group_b"])
+        self._create_managed_room(
+            name="Both Groups Room", groups=["group_a", "group_b"]
+        )
+
+        channel = self.make_request(
+            method="GET",
+            path=f"{self.LIST_PATH}?managed_room_group_id=group_a",
+            access_token=self.creator_access_token,
+            shorthand=False,
+        )
+        assert channel.code == HTTPStatus.OK, channel.result
+        assert channel.json_body["total_room_count_estimate"] == 2
+        names = {r["name"] for r in channel.json_body["chunk"]}
+        assert names == {"Group A Room", "Both Groups Room"}
+
+    def test_list_filter_by_group_id_no_match(self, mock_get_group_members) -> None:
+        """managed_room_group_id with no matching group returns empty chunk."""
+        mock_get_group_members.return_value = []
+        self._create_managed_room(name="Some Room", groups=["group_a"])
+
+        channel = self.make_request(
+            method="GET",
+            path=f"{self.LIST_PATH}?managed_room_group_id=nonexistent_group",
+            access_token=self.creator_access_token,
+            shorthand=False,
+        )
+        assert channel.code == HTTPStatus.OK, channel.result
+        assert channel.json_body["total_room_count_estimate"] == 0
+        assert channel.json_body["chunk"] == []
+
+    def test_list_order_by_name_asc(self, mock_get_group_members) -> None:
+        """order_by=name with dir=f returns rooms sorted by name ascending."""
+        self._create_managed_room(name="Zebra Room")
+        self._create_managed_room(name="Apple Room")
+        self._create_managed_room(name="Mango Room")
+
+        channel = self.make_request(
+            method="GET",
+            path=f"{self.LIST_PATH}?order_by=name&dir=f",
+            access_token=self.creator_access_token,
+            shorthand=False,
+        )
+        assert channel.code == HTTPStatus.OK, channel.result
+        names = [r["name"] for r in channel.json_body["chunk"]]
+        assert names == sorted(names)
+
+    def test_list_order_by_name_desc(self, mock_get_group_members) -> None:
+        """order_by=name with dir=b returns rooms sorted by name descending."""
+        self._create_managed_room(name="Zebra Room")
+        self._create_managed_room(name="Apple Room")
+        self._create_managed_room(name="Mango Room")
+
+        channel = self.make_request(
+            method="GET",
+            path=f"{self.LIST_PATH}?order_by=name&dir=b",
+            access_token=self.creator_access_token,
+            shorthand=False,
+        )
+        assert channel.code == HTTPStatus.OK, channel.result
+        names = [r["name"] for r in channel.json_body["chunk"]]
+        assert names == sorted(names, reverse=True)
+
+    def test_list_invalid_order_by(self, mock_get_group_members) -> None:
+        """Deprecated or unknown order_by values return 400."""
+        for bad_value in ("alphabetical", "size", "unknown_field"):
+            channel = self.make_request(
+                method="GET",
+                path=f"{self.LIST_PATH}?order_by={bad_value}",
+                access_token=self.creator_access_token,
+                shorthand=False,
+            )
+            assert (
+                channel.code == HTTPStatus.BAD_REQUEST
+            ), f"Expected 400 for order_by={bad_value!r}, got {channel.code}"
+
+    def test_list_invalid_dir(self, mock_get_group_members) -> None:
+        """Invalid dir values return 400."""
+        channel = self.make_request(
+            method="GET",
+            path=f"{self.LIST_PATH}?dir=x",
+            access_token=self.creator_access_token,
+            shorthand=False,
+        )
+        assert channel.code == HTTPStatus.BAD_REQUEST, channel.result
+
+    def test_list_total_count_reflects_filter(self, mock_get_group_members) -> None:
+        """total_room_count_estimate reflects the filtered result count, not total."""
+        self._create_managed_room(name="Match Room A")
+        self._create_managed_room(name="Match Room B")
+        self._create_managed_room(name="No Match")
+
+        channel = self.make_request(
+            method="GET",
+            path=f"{self.LIST_PATH}?search_term=Match+Room",
+            access_token=self.creator_access_token,
+            shorthand=False,
+        )
+        assert channel.code == HTTPStatus.OK, channel.result
+        assert channel.json_body["total_room_count_estimate"] == 2
+        assert len(channel.json_body["chunk"]) == 2
+
+    def test_list_pagination_with_search_term(self, mock_get_group_members) -> None:
+        """from and limit work correctly when search_term is active."""
+        for i in range(4):
+            self._create_managed_room(name=f"Filter Room {i}")
+        self._create_managed_room(name="Excluded")
+
+        # First page
+        channel = self.make_request(
+            method="GET",
+            path=f"{self.LIST_PATH}?search_term=Filter+Room&limit=2&order_by=name",
+            access_token=self.creator_access_token,
+            shorthand=False,
+        )
+        assert channel.code == HTTPStatus.OK, channel.result
+        assert channel.json_body["total_room_count_estimate"] == 4
+        assert len(channel.json_body["chunk"]) == 2
+        assert "next_batch" in channel.json_body
+        assert "prev_batch" not in channel.json_body
+
+        # Second page
+        next_batch = channel.json_body["next_batch"]
+        channel = self.make_request(
+            method="GET",
+            path=f"{self.LIST_PATH}?search_term=Filter+Room&limit=2&order_by=name&from={next_batch}",
+            access_token=self.creator_access_token,
+            shorthand=False,
+        )
+        assert channel.code == HTTPStatus.OK, channel.result
+        assert len(channel.json_body["chunk"]) == 2
+        assert "next_batch" not in channel.json_body
+        assert "prev_batch" in channel.json_body
+
+    def test_list_combined_filters(self, mock_get_group_members) -> None:
+        """search_term, managed_room_group_id, and order_by work in combination."""
+        mock_get_group_members.return_value = []
+        self._create_managed_room(name="Project Alpha", groups=["team_a"])
+        self._create_managed_room(name="Project Beta", groups=["team_a"])
+        self._create_managed_room(name="Project Gamma", groups=["team_b"])
+        self._create_managed_room(name="Other Room", groups=["team_a"])
+
+        channel = self.make_request(
+            method="GET",
+            path=f"{self.LIST_PATH}?search_term=Project&managed_room_group_id=team_a&order_by=name&dir=b",
+            access_token=self.creator_access_token,
+            shorthand=False,
+        )
+        assert channel.code == HTTPStatus.OK, channel.result
+        assert channel.json_body["total_room_count_estimate"] == 2
+        names = [r["name"] for r in channel.json_body["chunk"]]
+        assert names == ["Project Beta", "Project Alpha"]
