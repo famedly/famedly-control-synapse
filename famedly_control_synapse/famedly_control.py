@@ -58,7 +58,7 @@ class _SyncTriggerJsonResource(JsonResource):
 class FamedlyControl:
     # NOTE: Adjust the openapi-spec.yaml file version when this changes. Match this even
     # if there are no changes to the openapi spec.
-    __version__ = "0.0.2"
+    __version__ = "0.0.3"
 
     def __init__(self, config: FamedlyControlConfig, api: ModuleApi) -> None:
         self.api = api
