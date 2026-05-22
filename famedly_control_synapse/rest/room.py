@@ -9,6 +9,7 @@ from synapse.http.servlet import (
     RestServlet,
     parse_integer,
     parse_json_object_from_request,
+    parse_string,
 )
 from synapse.http.site import SynapseRequest
 from synapse.module_api import ModuleApi
@@ -16,7 +17,10 @@ from synapse.module_api.errors import Codes
 from synapse.types import JsonDict, RoomID
 
 from famedly_control_synapse.client import FamedlyControlError
-from famedly_control_synapse.repository import ManagedRoomRepository
+from famedly_control_synapse.repository import (
+    VALID_ORDER_BY_FIELDS,
+    ManagedRoomRepository,
+)
 from famedly_control_synapse.rest.types import (
     AssignGroupsToManagedRoomRequest,
     CreateManagedRoomRequest,
@@ -145,9 +149,36 @@ class ListManagedRoomsResource(RestServlet):
         # should be safe.
         from_token = parse_integer(request, "from", default=0)
         limit = parse_integer(request, "limit", default=100)
+        search_term = parse_string(request, "search_term")
+        managed_room_group_id = parse_string(request, "managed_room_group_id")
+        order_by = parse_string(request, "order_by", default="name")
+        dir_param = parse_string(request, "dir", default="f")
 
-        total_count = await self.repo.count_managed_rooms()
-        entries = await self.repo.get_managed_rooms_paginated(limit + 1, from_token)
+        if order_by not in VALID_ORDER_BY_FIELDS:
+            raise FamedlyControlError(
+                400,
+                f"Unknown order_by value: {order_by!r}",
+                errcode=Codes.INVALID_PARAM,
+            )
+        if dir_param not in ("f", "b"):
+            raise FamedlyControlError(
+                400,
+                "dir must be 'f' or 'b'",
+                errcode=Codes.INVALID_PARAM,
+            )
+        direction = "ASC" if dir_param == "f" else "DESC"
+
+        total_count = await self.repo.count_managed_rooms(
+            search_term, managed_room_group_id
+        )
+        entries = await self.repo.get_managed_rooms_paginated(
+            limit + 1,
+            from_token,
+            search_term=search_term,
+            order_by=order_by,
+            direction=direction,
+            managed_room_group_id=managed_room_group_id,
+        )
 
         has_next = len(entries) > limit
         chunk = entries[:limit]

@@ -6,6 +6,26 @@ from synapse.types import JsonDict
 
 from famedly_control_synapse.types import MANAGED_ROOM_TYPE, SYNC_TOKEN_TYPE
 
+# Maps order_by field names to SQL column expressions.
+# Those values are inserted directly into SQL; never use user input here.
+_ORDER_BY_COLUMN: dict[str, str] = {
+    "name": "rs.name",
+    "canonical_alias": "rs.canonical_alias",
+    "joined_members": "rc.joined_members",
+    "joined_local_members": "rc.joined_local_members",
+    "guest_access": "rs.guest_access",
+    "history_visibility": "rs.history_visibility",
+    "join_rules": "rs.join_rules",
+    "encryption": "rs.encryption",
+    "federatable": "rs.is_federatable",
+    "public": "r.is_public",
+    "state_events": "rc.current_state_events",
+    "version": "r.room_version",
+    "creator": "r.creator",
+}
+
+VALID_ORDER_BY_FIELDS: frozenset[str] = frozenset(_ORDER_BY_COLUMN)
+
 
 class ManagedRoomRepository:
     def __init__(self, api: ModuleApi) -> None:
@@ -14,74 +34,156 @@ class ManagedRoomRepository:
         self._account_data_handler = api._account_data_handler
         self._using_postgres = isinstance(self._store.db_pool.engine, PostgresEngine)
 
-    async def count_managed_rooms(self) -> int:
+    def _build_filter_sql(
+        self,
+        search_term: str | None,
+        managed_room_group_id: str | None,
+    ) -> tuple[str, str, list]:
+        """Build conditional SQL fragments and their bound parameters.
+
+        Returns (group_filter_sql, search_filter_sql, params).
+        params contains values for ? placeholders in group_filter_sql followed by
+        search_filter_sql, in that order.
+        """
+        params: list = []
+
+        group_filter_sql = ""
+        if managed_room_group_id is not None:
+            if self._using_postgres:
+                group_filter_sql = """
+                    AND EXISTS (
+                        SELECT 1
+                        FROM jsonb_array_elements_text(ad.content::jsonb -> 'groups') gf(value)
+                        WHERE gf.value = ?
+                    )"""
+            else:
+                group_filter_sql = """
+                    AND EXISTS (
+                        SELECT 1 FROM json_each(json_extract(ad.content, '$.groups'))
+                        WHERE value = ?
+                    )"""
+            params.append(managed_room_group_id)
+
+        search_filter_sql = ""
+        if search_term is not None:
+            escaped = (
+                search_term.lower()
+                .replace("!", "!!")
+                .replace("%", "!%")
+                .replace("_", "!_")
+            )
+            pattern = f"%{escaped}%"
+            alias_body = escaped[1:] if escaped.startswith("#") else escaped
+            alias_pattern = f"#%{alias_body}%"
+            search_filter_sql = """
+                WHERE (
+                    inner_q.room_id = ?
+                    OR LOWER(rs.name) LIKE ? ESCAPE '!'
+                    OR LOWER(rs.canonical_alias) LIKE ? ESCAPE '!'
+                )"""
+            params.extend([search_term, pattern, alias_pattern])
+
+        return group_filter_sql, search_filter_sql, params
+
+    async def count_managed_rooms(
+        self,
+        search_term: str | None = None,
+        managed_room_group_id: str | None = None,
+    ) -> int:
+        group_filter_sql, search_filter_sql, filter_params = self._build_filter_sql(
+            search_term, managed_room_group_id
+        )
+        rs_join = (
+            "LEFT JOIN room_stats_state rs ON rs.room_id = inner_q.room_id"
+            if search_filter_sql
+            else ""
+        )
+        sql = f"""
+            SELECT COUNT(*)
+            FROM (
+                SELECT ad.room_id
+                FROM room_account_data ad
+                WHERE ad.account_data_type = ?
+                {group_filter_sql}
+                GROUP BY ad.room_id
+            ) inner_q
+            {rs_join}
+            {search_filter_sql}
+        """
         rows = await self._store.db_pool.execute(
             "count_managed_rooms",
-            "SELECT COUNT(DISTINCT room_id) FROM room_account_data WHERE account_data_type = ?",
+            sql,
             MANAGED_ROOM_TYPE,
+            *filter_params,
         )
         return rows[0][0] if rows else 0
 
     async def get_managed_rooms_paginated(
-        self, limit: int, offset: int
+        self,
+        limit: int,
+        offset: int,
+        search_term: str | None = None,
+        order_by: str = "name",
+        direction: str = "ASC",
+        managed_room_group_id: str | None = None,
     ) -> list[JsonDict]:
-        if self._using_postgres:
-            sql = """
-                SELECT
-                    paged.room_id,
-                    paged.merged_groups,
-                    rs.name,
-                    rs.topic,
-                    rs.canonical_alias,
-                    rs.avatar,
-                    rs.guest_access,
-                    rs.history_visibility,
-                    rc.joined_members
-                FROM (
-                    SELECT
-                        ad.room_id,
-                        JSONB_AGG(DISTINCT g.value) AS merged_groups
+        group_filter_sql, search_filter_sql, filter_params = self._build_filter_sql(
+            search_term, managed_room_group_id
+        )
+        extra_joins = (
+            "LEFT JOIN rooms r ON r.room_id = inner_q.room_id"
+            if order_by in ("version", "public", "creator")
+            else ""
+        )
 
-                    FROM room_account_data ad
-                    LEFT JOIN jsonb_array_elements_text(ad.content::jsonb -> 'groups') g(value) ON TRUE
-                    WHERE ad.account_data_type = ?
-                    GROUP BY ad.room_id
-                    ORDER BY ad.room_id
-                    LIMIT ? OFFSET ?
-                ) paged
-                LEFT JOIN room_stats_state rs ON rs.room_id = paged.room_id
-                LEFT JOIN room_stats_current rc ON rc.room_id = paged.room_id
-            """
+        order_col = _ORDER_BY_COLUMN[order_by]
+        if self._using_postgres:
+            agg_select = "JSONB_AGG(DISTINCT g.value) FILTER (WHERE g.value IS NOT NULL) AS merged_groups"
+            array_join = "LEFT JOIN jsonb_array_elements_text(ad.content::jsonb -> 'groups') g(value) ON TRUE"
+            order_by_sql = (
+                f"ORDER BY {order_col} {direction} NULLS LAST, inner_q.room_id ASC"
+            )
         else:
-            sql = """
+            agg_select = "JSON_GROUP_ARRAY(DISTINCT g.value) FILTER (WHERE g.value IS NOT NULL) AS merged_groups"
+            array_join = (
+                "LEFT JOIN json_each(json_extract(ad.content, '$.groups')) g ON TRUE"
+            )
+            # Use CASE to put NULLs last regardless of direction
+            order_by_sql = f"ORDER BY CASE WHEN {order_col} IS NULL THEN 1 ELSE 0 END, {order_col} {direction}, inner_q.room_id ASC"
+
+        sql = f"""
+            SELECT
+                inner_q.room_id,
+                inner_q.merged_groups,
+                rs.name,
+                rs.topic,
+                rs.canonical_alias,
+                rs.avatar,
+                rs.guest_access,
+                rs.history_visibility,
+                rc.joined_members
+            FROM (
                 SELECT
-                    paged.room_id,
-                    paged.merged_groups,
-                    rs.name,
-                    rs.topic,
-                    rs.canonical_alias,
-                    rs.avatar,
-                    rs.guest_access,
-                    rs.history_visibility,
-                    rc.joined_members
-                FROM (
-                    SELECT
-                        ad.room_id,
-                        JSON_GROUP_ARRAY(DISTINCT g.value) AS merged_groups
-                    FROM room_account_data ad
-                    LEFT JOIN json_each(json_extract(ad.content, '$.groups')) g ON TRUE
-                    WHERE ad.account_data_type = ?
-                    GROUP BY ad.room_id
-                    ORDER BY ad.room_id
-                    LIMIT ? OFFSET ?
-                ) paged
-                LEFT JOIN room_stats_state rs ON rs.room_id = paged.room_id
-                LEFT JOIN room_stats_current rc ON rc.room_id = paged.room_id
-            """
+                    ad.room_id,
+                    {agg_select}
+                FROM room_account_data ad
+                {array_join}
+                WHERE ad.account_data_type = ?
+                {group_filter_sql}
+                GROUP BY ad.room_id
+            ) inner_q
+            LEFT JOIN room_stats_state rs ON rs.room_id = inner_q.room_id
+            LEFT JOIN room_stats_current rc ON rc.room_id = inner_q.room_id
+            {extra_joins}
+            {search_filter_sql}
+            {order_by_sql}
+            LIMIT ? OFFSET ?
+        """
         rows = await self._store.db_pool.execute(
             "get_managed_rooms_paginated",
             sql,
             MANAGED_ROOM_TYPE,
+            *filter_params,
             limit,
             offset,
         )
