@@ -3,7 +3,7 @@ info:
   title: Famedly Managed Room API
   description: >
     API for creating and managing Famedly managed rooms.
-  version: "0.0.3"
+  version: "0.0.4"
 servers:
   - url: https://example.com
 paths:

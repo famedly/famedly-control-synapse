@@ -28,7 +28,7 @@ classifiers = [
 dependencies = [
     "pydantic>=2.0.0",
 ]
-version = "0.0.3"
+version = "0.0.4"
 
 [project.urls]
 Documentation = "https://github.com/famedly/famedly-control-synapse#famedly-control-synapse"

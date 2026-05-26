@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.0.4] - 2026-05-26
+
+- chore: update GitHub Action pins (Niklas Zender)
+- feat: filtering and sorting for rooms (FrenchGithubUser)
+
 ## [0.0.3] - 2026-05-15
 
 Updated the OpenAPI spec to reflect new API response shape. Added a retry queue for
