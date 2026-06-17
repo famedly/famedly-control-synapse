@@ -9,6 +9,7 @@ servers:
 paths:
   /_famedlyControl/v1/managedRooms/createRoom:
     post:
+      operationId: createManagedRoom
       summary: Create a managed room.
       description: >
         Creates a new non-federated, invite-only room with restricted power levels.
@@ -86,6 +87,7 @@ paths:
 
   /_famedlyControl/v1/managedRooms/rooms:
     get:
+      operationId: listManagedRooms
       summary: List managed rooms.
       description: >
         Returns a list of all rooms marked with `de.famedly.managedRoom` account data.
@@ -175,6 +177,7 @@ paths:
 
   /_famedlyControl/v1/managedRooms/{roomId}/groups:
     post:
+      operationId: updateManagedRoomGroups
       summary: Update groups assigned to a managed room.
       description: >
         Updates the list of groups assigned to a specific managed room.
