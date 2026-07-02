@@ -1508,3 +1508,111 @@ class TestListManagedRooms(ModuleApiTestCase):
         assert channel.json_body["total_room_count_estimate"] == 2
         names = [r["name"] for r in channel.json_body["chunk"]]
         assert names == ["Project Beta", "Project Alpha"]
+
+
+@patch(
+    "famedly_control_synapse.client.FamedlyControlClient.get_group_members",
+    new_callable=AsyncMock,
+)
+class TestGetManagedRoom(ModuleApiTestCase):
+    def prepare(self, reactor: MemoryReactor, clock: Clock, homeserver: HomeServer):
+        super().prepare(reactor, clock, homeserver)
+        self.non_admin = self.register_user("non_admin", "password", admin=False)
+        self.non_admin_token = self.login("non_admin", "password")
+
+    def _get_path(self, room_id: str) -> str:
+        return f"{self.BASE_PATH}/{room_id}"
+
+    def test_get_requires_admin(self, mock_get_group_members) -> None:
+        """Non-admin users should get a 403."""
+        mock_get_group_members.return_value = []
+        room_id = self._create_managed_room(name="Room", groups=[])
+
+        channel = self.make_request(
+            method="GET",
+            path=self._get_path(room_id),
+            access_token=self.non_admin_token,
+            shorthand=False,
+        )
+        assert channel.code == HTTPStatus.FORBIDDEN, channel.result
+
+    def test_get_requires_auth(self, mock_get_group_members) -> None:
+        """Unauthenticated requests should get a 401."""
+        mock_get_group_members.return_value = []
+        room_id = self._create_managed_room(name="Room", groups=[])
+
+        channel = self.make_request(
+            method="GET",
+            path=self._get_path(room_id),
+            shorthand=False,
+        )
+        assert channel.code == HTTPStatus.UNAUTHORIZED, channel.result
+
+    def test_get_returns_managed_room(self, mock_get_group_members) -> None:
+        """A managed room should be returned as a ManagedRoomChunk."""
+        user_1 = self.register_user("user1", "password")
+        user_2 = self.register_user("user2", "password")
+
+        def get_members_by_group(group_id):
+            if group_id == "group1":
+                return [user_1]
+            if group_id == "group2":
+                return [user_2]
+            return []
+
+        mock_get_group_members.side_effect = get_members_by_group
+
+        room_id = self._create_managed_room(
+            name="Fetched Room", groups=["group1", "group2"]
+        )
+
+        channel = self.make_request(
+            method="GET",
+            path=self._get_path(room_id),
+            access_token=self.creator_access_token,
+            shorthand=False,
+        )
+        assert channel.code == HTTPStatus.OK, channel.result
+        body = channel.json_body
+        assert body["room_id"] == room_id
+        assert body["name"] == "Fetched Room"
+        assert body[MANAGED_ROOM_TYPE]["groups"] == ["group1", "group2"]
+
+    def test_get_unknown_room_returns_404(self, mock_get_group_members) -> None:
+        """A room that is not managed returns 404, whether or not it exists."""
+        # A well-formed room ID that does not exist.
+        channel = self.make_request(
+            method="GET",
+            path=self._get_path(f"!doesnotexist:{self.server_name_for_this_server}"),
+            access_token=self.creator_access_token,
+            shorthand=False,
+        )
+        assert channel.code == HTTPStatus.NOT_FOUND, channel.result
+
+        # A real room that exists but is not managed.
+        mock_get_group_members.return_value = []
+        unmanaged_room_id = self.helper.create_room_as(
+            self.creator, tok=self.creator_access_token
+        )
+        channel = self.make_request(
+            method="GET",
+            path=self._get_path(unmanaged_room_id),
+            access_token=self.creator_access_token,
+            shorthand=False,
+        )
+        assert channel.code == HTTPStatus.NOT_FOUND, channel.result
+
+    def test_list_route_not_shadowed(self, mock_get_group_members) -> None:
+        """The '/{roomId}' route must not swallow the literal '/rooms' route."""
+        mock_get_group_members.return_value = []
+        self._create_managed_room(name="Room", groups=[])
+
+        channel = self.make_request(
+            method="GET",
+            path=self.LIST_PATH,
+            access_token=self.creator_access_token,
+            shorthand=False,
+        )
+        assert channel.code == HTTPStatus.OK, channel.result
+        # The list endpoint returns a paginated chunk, not a single ManagedRoomChunk.
+        assert "chunk" in channel.json_body

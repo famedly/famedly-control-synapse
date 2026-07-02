@@ -196,6 +196,40 @@ class ListManagedRoomsResource(RestServlet):
         return 200, response
 
 
+class GetManagedRoomResource(RestServlet):
+    """Resource for fetching a single managed room."""
+
+    # Anchored with '$' so this does not swallow sibling routes such as
+    # '/{room_id}/groups'. It still overlaps with the literal '/rooms' route,
+    # so this servlet MUST be registered after ListManagedRoomsResource, which
+    # Synapse then matches first (routes are checked in registration order).
+    PATTERNS = famedly_control_patterns("/(?P<room_id>[^/]*)$")
+
+    def __init__(self, api: ModuleApi, repository: ManagedRoomRepository) -> None:
+        super().__init__()
+        self.api = api
+        self.repo = repository
+
+    async def on_GET(
+        self, request: SynapseRequest, room_id: str
+    ) -> tuple[int, JsonDict]:
+        """Handle GET requests to fetch a single managed room."""
+        requester = await self.api.get_user_by_req(request)
+        user_id = requester.user.to_string()
+        if not await self.api.is_user_admin(user_id):
+            raise FamedlyControlError(
+                403, "User is not administrator", errcode=Codes.FORBIDDEN
+            )
+
+        entry = await self.repo.get_managed_room(room_id)
+        if entry is None:
+            raise FamedlyControlError(
+                404, "Room not found or not a managed room", errcode=Codes.NOT_FOUND
+            )
+
+        return 200, entry
+
+
 class AssignGroupsToManagedRoomResource(RestServlet):
     """Resource for assigning groups to a managed room."""
 
