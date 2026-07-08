@@ -104,18 +104,76 @@ class CreateManagedRoomResource(RestServlet):
                 CREATOR_POWER_LEVEL - 1
             )
 
+        # Fetch the group members *before* creating the room. If this fails (e.g. the
+        # Famedly Control API is unreachable), we skip room creation entirely and return
+        # an error, rather than leaving behind a partial room the client cannot recover.
+        try:
+            expected_member_external_ids = await self.room_handler.fetch_group_members(
+                validated_room_config.groups
+            )
+        except FamedlyControlError as e:
+            raise FamedlyControlError(
+                e.code,
+                e.msg,
+                errcode=e.errcode,
+                additional_fields={"groups": validated_room_config.groups},
+            )
+
+        await self.repository.initialize_sync_token(admin_user_id)
+
         room_id, _ = await self.api.create_room(
             admin_user_id,
             validated_room_config.model_dump(by_alias=True, exclude_none=True),
         )
 
-        await self.repository.initialize_sync_token(admin_user_id)
-
-        # if there is a problem, or the members are only partially assigned, this will
-        # respond directly
-        await self.room_handler.assign_groups_to_room(
-            room_id, admin_user_id, validated_room_config.groups
-        )
+        # Once the room exists, any failure while assigning groups would leave a partial
+        # managed room behind. Delete the room immediately so we never end up in that
+        # state, then re-raise the error to the client.
+        try:
+            await self.room_handler.assign_groups_to_room(
+                room_id,
+                admin_user_id,
+                validated_room_config.groups,
+                expected_member_external_ids=expected_member_external_ids,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to assign groups to newly created room %s; deleting it to "
+                "avoid a partial managed room",
+                room_id,
+            )
+            try:
+                await self.api.delete_room(room_id)
+            except Exception:
+                logger.exception(
+                    "Failed to delete room %s during rollback; it may be left partial",
+                    room_id,
+                )
+                raise FamedlyControlError(
+                    500,
+                    "Failed to create managed room and could not clean up the "
+                    "partially created room; manual intervention may be required",
+                    errcode=Codes.UNKNOWN,
+                    additional_fields={"room_id": room_id},
+                )
+            # assign_groups_to_room may have queued retry-queue entries for this room
+            # before failing. Drop them so the now-deleted room doesn't abort future
+            # retry-queue processing. Persist the removal too: the background processor
+            # may have already saved a snapshot containing this room, and an in-memory
+            # pop alone would leave the deleted room in the on-disk snapshot.
+            try:
+                async with self.room_handler.retry_queue_lock:
+                    if (
+                        self.room_handler.retry_queue.rooms.pop(room_id, None)
+                        is not None
+                    ):
+                        await self.room_handler.save_retry_queue_snapshot(admin_user_id)
+            except Exception:
+                logger.exception(
+                    "Failed to clean up retry queue for room %s during rollback",
+                    room_id,
+                )
+            raise
 
         return 200, {"room_id": room_id, "groups": validated_room_config.groups}
 
