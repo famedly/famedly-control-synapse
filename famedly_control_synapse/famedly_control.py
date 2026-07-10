@@ -30,6 +30,7 @@ from famedly_control_synapse.rest.room import (
     MANAGED_ROOM_API_PREFIX,
     AssignGroupsToManagedRoomResource,
     CreateManagedRoomResource,
+    GetManagedRoomResource,
     ListManagedRoomsResource,
 )
 from famedly_control_synapse.rest.types import PowerLevelEventContent
@@ -85,6 +86,10 @@ class FamedlyControl:
                 self.api, self.room_handler, self.repository
             ).register(self.resource)
             ListManagedRoomsResource(self.api, self.repository).register(self.resource)
+            # Registered after ListManagedRoomsResource: its '/{room_id}$' pattern
+            # also matches '/rooms', so the literal '/rooms' route must be checked
+            # first (Synapse matches routes in registration order).
+            GetManagedRoomResource(self.api, self.repository).register(self.resource)
             AssignGroupsToManagedRoomResource(
                 self.api, self.room_handler, self.repository
             ).register(self.resource)

@@ -175,6 +175,38 @@ paths:
         "403":
           description: Forbidden. User is not administrator.
 
+  /_famedlyControl/v1/managedRooms/{roomId}:
+    get:
+      operationId: getManagedRoom
+      summary: Get a single managed room.
+      description: >
+        Returns the managed room marked with `de.famedly.managedRoom` account data,
+        including the groups assigned to it.
+      security:
+        - accessToken: []
+      parameters:
+        - in: path
+          name: roomId
+          required: true
+          schema:
+            type: string
+          description: The ID of the managed room to fetch.
+      responses:
+        "200":
+          description: The managed room.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ManagedRoomChunk"
+        "400":
+          description: Malformed room ID.
+        "401":
+          description: Invalid or missing access token.
+        "403":
+          description: Forbidden. User is not administrator.
+        "404":
+          description: Room not found or not a managed room.
+
   /_famedlyControl/v1/managedRooms/{roomId}/groups:
     post:
       operationId: updateManagedRoomGroups

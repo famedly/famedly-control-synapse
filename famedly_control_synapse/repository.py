@@ -190,6 +190,59 @@ class ManagedRoomRepository:
 
         return [self._row_to_room_entry(row) for row in rows]
 
+    async def get_managed_room(self, room_id: str) -> JsonDict | None:
+        """Fetch a single managed room as a ManagedRoomChunk.
+
+        Aggregates the assigned groups from the room's ``de.famedly.managedRoom``
+        account data and joins the room stats, mirroring the shape of the entries
+        returned by `get_managed_rooms_paginated()`.
+
+        Returns:
+            A ManagedRoomChunk dict, or None if the room is not a managed room.
+        """
+        if self._using_postgres:
+            agg_select = "JSONB_AGG(DISTINCT g.value) FILTER (WHERE g.value IS NOT NULL) AS merged_groups"
+            array_join = "LEFT JOIN jsonb_array_elements_text(ad.content::jsonb -> 'groups') g(value) ON TRUE"
+        else:
+            agg_select = "JSON_GROUP_ARRAY(DISTINCT g.value) FILTER (WHERE g.value IS NOT NULL) AS merged_groups"
+            array_join = (
+                "LEFT JOIN json_each(json_extract(ad.content, '$.groups')) g ON TRUE"
+            )
+
+        sql = f"""
+            SELECT
+                inner_q.room_id,
+                inner_q.merged_groups,
+                rs.name,
+                rs.topic,
+                rs.canonical_alias,
+                rs.avatar,
+                rs.guest_access,
+                rs.history_visibility,
+                rc.joined_members
+            FROM (
+                SELECT
+                    ad.room_id,
+                    {agg_select}
+                FROM room_account_data ad
+                {array_join}
+                WHERE ad.account_data_type = ?
+                    AND ad.room_id = ?
+                GROUP BY ad.room_id
+            ) inner_q
+            LEFT JOIN room_stats_state rs ON rs.room_id = inner_q.room_id
+            LEFT JOIN room_stats_current rc ON rc.room_id = inner_q.room_id
+        """
+        rows = await self._store.db_pool.execute(
+            "get_managed_room",
+            sql,
+            MANAGED_ROOM_TYPE,
+            room_id,
+        )
+        if not rows:
+            return None
+        return self._row_to_room_entry(rows[0])
+
     async def get_rooms_by_group(self) -> dict[str, list[tuple[str, str]]]:
         """Get a mapping of group_id to list of (room_id, admin_user_id).
 
