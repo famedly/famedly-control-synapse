@@ -88,7 +88,7 @@ class CreateManagedRoomResource(RestServlet):
                 400,
                 "Invalid request body",
                 errcode=Codes.BAD_JSON,
-                additional_fields={"details": validation_error},
+                additional_fields={"de.famedly.details": validation_error},
             )
 
         room_version = KNOWN_ROOM_VERSIONS.get(validated_room_config.room_version)
@@ -116,7 +116,7 @@ class CreateManagedRoomResource(RestServlet):
                 e.code,
                 e.msg,
                 errcode=e.errcode,
-                additional_fields={"groups": validated_room_config.groups},
+                additional_fields={"de.famedly.groups": validated_room_config.groups},
             )
 
         await self.repository.initialize_sync_token(admin_user_id)
@@ -175,7 +175,10 @@ class CreateManagedRoomResource(RestServlet):
                 )
             raise
 
-        return 200, {"room_id": room_id, "groups": validated_room_config.groups}
+        return 200, {
+            "room_id": room_id,
+            "de.famedly.groups": validated_room_config.groups,
+        }
 
 
 class ListManagedRoomsResource(RestServlet):
@@ -339,7 +342,7 @@ class AssignGroupsToManagedRoomResource(RestServlet):
                 400,
                 "Invalid request body",
                 errcode=Codes.BAD_JSON,
-                additional_fields={"details": validation_error},
+                additional_fields={"de.famedly.details": validation_error},
             )
 
         # if there is a problem, or the members are only partially assigned, this will
@@ -348,4 +351,4 @@ class AssignGroupsToManagedRoomResource(RestServlet):
             room_id, user_id, validated_input.groups
         )
 
-        return 200, {"room_id": room_id, "groups": validated_input.groups}
+        return 200, {"room_id": room_id, "de.famedly.groups": validated_input.groups}

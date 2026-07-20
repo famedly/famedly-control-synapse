@@ -536,7 +536,10 @@ class ManagedRoomHandler:
                 raise FamedlyControlError(
                     e.code,
                     e.msg,
-                    additional_fields={"room_id": room_id, "groups": list_of_groups},
+                    additional_fields={
+                        "room_id": room_id,
+                        "de.famedly.groups": list_of_groups,
+                    },
                 )
 
         member_mxids_mapping = (
