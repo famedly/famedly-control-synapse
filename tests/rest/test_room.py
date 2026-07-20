@@ -20,7 +20,7 @@ from twisted.internet.testing import MemoryReactor
 from famedly_control_synapse.client import FamedlyControlError
 from famedly_control_synapse.rest.types import CreateManagedRoomRequest, CreationContent
 from famedly_control_synapse.room_handler import famedly_control_user_sync_error
-from famedly_control_synapse.types import MANAGED_ROOM_TYPE
+from famedly_control_synapse.types import MANAGED_ROOM_TYPE, ActionReason
 from tests.utils.homeserver_testcase import override_config
 from tests.utils.module_api_testcase import ModuleApiTestCase
 
@@ -340,6 +340,122 @@ class TestManagedRoomCreation(ModuleApiTestCase):
         )
 
         assert channel.code == HTTPStatus.NOT_FOUND, channel.result
+
+    def test_room_creation_skipped_when_group_fetch_fails(
+        self, mock_get_group_members
+    ) -> None:
+        """If fetching the group members fails (e.g. the Famedly Control API is
+        unreachable), no room is created and an error is returned to the client."""
+        mock_get_group_members.side_effect = FamedlyControlError(
+            HTTPStatus.INTERNAL_SERVER_ERROR, "Connection refused"
+        )
+
+        with patch(
+            "synapse.module_api.ModuleApi.create_room", new_callable=AsyncMock
+        ) as mock_create_room:
+            channel = self.make_request(
+                method="POST",
+                path=self.CREATE_PATH,
+                content=self.room_config(),
+                access_token=self.creator_access_token,
+                shorthand=False,
+            )
+
+        assert channel.code == HTTPStatus.INTERNAL_SERVER_ERROR, channel.result
+        assert "error" in channel.json_body
+        # The room must never have been created in the first place.
+        mock_create_room.assert_not_called()
+        # The groups are echoed back so the client knows which request failed.
+        assert channel.json_body.get("groups") == ["test_group"]
+
+    def test_partial_room_deleted_when_assign_fails(
+        self, mock_get_group_members
+    ) -> None:
+        """If assigning groups fails after the room has been created, the room is
+        deleted immediately so we never leave behind a partial managed room.
+
+        This asserts the room is genuinely gone: the shutdown kicks every local
+        member, including the room creator who would otherwise hold the room open,
+        and the room is purged from the database.
+
+        `assign_groups_to_room` may also have queued retry-queue entries for the
+        room before failing, and the background processor may have persisted a
+        snapshot containing them. The rollback must drop the room from both the
+        in-memory queue and the on-disk snapshot, otherwise the deleted room
+        poisons retry-queue processing after a restart."""
+        mock_get_group_members.return_value = [self.invitee]
+
+        room_handler = self.hs.room_control.room_handler  # type: ignore[attr-defined]
+        captured: dict[str, object] = {}
+
+        async def queue_then_fail(
+            room_id: str,
+            admin_user_id: str,
+            *args: object,
+            **kwargs: object,
+        ) -> None:
+            # Record the room id and prove the creator is actually joined at this
+            # point, so the "room is gone" assertions afterwards are meaningful.
+            captured["room_id"] = room_id
+            captured["members_before"] = (
+                await room_handler.api._store.get_users_in_room(room_id)
+            )
+            # Simulate assign_groups_to_room queuing an unresolved member and the
+            # snapshot being persisted (e.g. by the background retry processor)
+            # before the failure surfaces.
+            async with room_handler.retry_queue_lock:
+                room_handler.retry_queue.add_external_id_to_room_queue(
+                    room_id,
+                    "@missing:test",
+                    ActionReason(
+                        reason="External User ID mapping not Found",
+                        is_removal=False,
+                        retry_count=0,
+                        first_attempt_utc_ms=0,
+                        latest_attempt_utc_ms=0,
+                    ),
+                )
+                await room_handler.save_retry_queue_snapshot(admin_user_id)
+            raise FamedlyControlError(HTTPStatus.INTERNAL_SERVER_ERROR, "boom")
+
+        with patch.object(
+            room_handler,
+            "assign_groups_to_room",
+            new=AsyncMock(side_effect=queue_then_fail),
+        ):
+            channel = self.make_request(
+                method="POST",
+                path=self.CREATE_PATH,
+                content=self.room_config(),
+                access_token=self.creator_access_token,
+                shorthand=False,
+            )
+
+        assert channel.code == HTTPStatus.INTERNAL_SERVER_ERROR, channel.result
+
+        room_id = captured["room_id"]
+        assert isinstance(room_id, str) and room_id.startswith("!"), room_id
+        members_before = captured["members_before"]
+        assert isinstance(members_before, list)
+        assert self.creator in members_before, members_before
+
+        # delete_room only schedules a background shutdown-and-purge; let it run.
+        self.reactor.advance(0.5)
+
+        # The room must now be empty: the shutdown kicked every local member,
+        # including the room creator.
+        members_after = self.get_success(self.store.get_users_in_room(room_id))
+        assert members_after == [], members_after
+        # And the room itself must actually be gone
+        assert self.get_success(self.store.get_room(room_id)) is None
+
+        # The deleted room must be gone from the in-memory retry queue...
+        assert room_id not in room_handler.retry_queue.rooms
+        # ...and from the persisted snapshot
+        persisted_queue = self.get_success(
+            room_handler.get_retry_queue_snapshot(self.creator)
+        )
+        assert room_id not in persisted_queue.rooms
 
     def room_config_custom(
         self,

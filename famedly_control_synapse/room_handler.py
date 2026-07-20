@@ -481,8 +481,29 @@ class ManagedRoomHandler:
         sender = create_event.sender
         return creator_from_content or sender
 
+    async def fetch_group_members(self, list_of_groups: list[str]) -> set[str]:
+        """
+        Fetch the union of external user IDs across all of the given groups.
+
+        This is separated out so that it can be called before creating a managed room:
+        if fetching the members fails (e.g. the Famedly Control API is unreachable), the
+        room creation can be skipped entirely instead of leaving behind a partial room.
+
+        Raises:
+            FamedlyControlError: If fetching the members of any group fails.
+        """
+        expected_member_external_ids: set[str] = set()
+        for group_id in list_of_groups:
+            members = await self.client.get_group_members(group_id)
+            expected_member_external_ids.update(members)
+        return expected_member_external_ids
+
     async def assign_groups_to_room(
-        self, room_id: str, admin_user: str, list_of_groups: list[str]
+        self,
+        room_id: str,
+        admin_user: str,
+        list_of_groups: list[str],
+        expected_member_external_ids: set[str] | None = None,
     ) -> None:
         """
         Provided a list of group IDs, parse and determine the external users that are
@@ -492,6 +513,10 @@ class ManagedRoomHandler:
         This may be used when answering the request to assign groups to a room, or when
         creating a room. A retry queue is provided for gracefully handling members that
         do not exist yet.
+
+        When the caller has already fetched the group members (e.g. before creating the
+        room to avoid a partial room), they can be passed in via
+        ``expected_member_external_ids`` to avoid fetching them again.
         """
         # Update room account data with new groups information
         await self.account_data_handler.add_account_data_to_room(
@@ -502,17 +527,17 @@ class ManagedRoomHandler:
         )
 
         # Get the new groups member state (desired state after update)
-        try:
-            expected_member_external_ids = set()
-            for group_id in list_of_groups:
-                members = await self.client.get_group_members(group_id)
-                expected_member_external_ids.update(members)
-        except FamedlyControlError as e:
-            raise FamedlyControlError(
-                e.code,
-                e.msg,
-                additional_fields={"room_id": room_id, "groups": list_of_groups},
-            )
+        if expected_member_external_ids is None:
+            try:
+                expected_member_external_ids = await self.fetch_group_members(
+                    list_of_groups
+                )
+            except FamedlyControlError as e:
+                raise FamedlyControlError(
+                    e.code,
+                    e.msg,
+                    additional_fields={"room_id": room_id, "groups": list_of_groups},
+                )
 
         member_mxids_mapping = (
             await self.batch_convert_external_user_ids_to_matrix_user_ids(
