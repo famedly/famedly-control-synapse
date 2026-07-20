@@ -21,6 +21,7 @@ from synapse.events import EventBase
 from synapse.http.server import JsonResource
 from synapse.module_api import ModuleApi
 from synapse.module_api.errors import Codes, SynapseError
+from synapse.synapse_rust.types import Requester
 from synapse.types import StateMap, UserID
 
 from famedly_control_synapse.client import FamedlyControlClient
@@ -117,7 +118,10 @@ class FamedlyControl:
         return FamedlyControlConfig.model_validate(config)
 
     async def check_event_allowed(
-        self, event: EventBase, state_events: StateMap[EventBase]
+        self,
+        event: EventBase,
+        state_events: StateMap[EventBase],
+        requester: Requester | None,
     ) -> tuple[bool, dict | None]:
         """Third-party rules callback that enforces membership and power level
         restrictions for managed rooms.
@@ -141,24 +145,32 @@ class FamedlyControl:
             return True, None
 
         if event.type == EventTypes.Member:
-            return await self._check_membership_allowed(event, create_event.sender)
+            # The Synapse internal auth handler only checks that Requester.user.to_string() is an admin, but that is not
+            # who made the request. So, use the database call directly to check that the request is authorized.
+            by_admin = (
+                await self.api.is_user_admin(requester.authenticated_entity)
+                if requester
+                else False
+            )
+            return await self._check_membership_allowed(event, by_admin)
         elif event.type == EventTypes.PowerLevels:
             return await self._check_power_levels_allowed(
                 event, state_events, create_event.sender
             )
         else:
-            # cannot happen but makes the linter happy
+            # cannot happen but makes the linter happy. No coverage on this condition, because we short-circuit out
+            # above.
             return True, None
 
     async def _check_membership_allowed(
-        self, event: EventBase, admin_user: str
+        self, event: EventBase, by_admin: bool
     ) -> tuple[bool, dict | None]:
         """Block membership changes in managed rooms unless sent by the admin.
 
         Joins are allowed because managed rooms are invite-only and only
         the admin can send invites, so a join is implicitly admin-authorised.
         """
-        if event.sender == admin_user:
+        if by_admin:
             return True, None
 
         membership = event.content.get("membership")

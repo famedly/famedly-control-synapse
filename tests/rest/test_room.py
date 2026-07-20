@@ -1258,6 +1258,25 @@ class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
         )
         assert channel.code == HTTPStatus.NOT_FOUND, channel.result
 
+    def test_nonexistent_room(self, mock_get_group_members) -> None:
+        """
+        Test that a nonexistent room raises a not found error
+        """
+        room_id = "!fake_room_does_not_exist:test"
+
+        # invitee will be in a group that we will attempt to add to the room
+        mock_get_group_members.side_effect = [self.invitee]
+
+        channel = self.make_request(
+            method="POST",
+            path=self.BASE_PATH + f"/{room_id}/groups",
+            content={"groups": ["group_of_silly_people"]},
+            access_token=self.creator_access_token,
+            shorthand=False,
+        )
+        assert channel.code == HTTPStatus.NOT_FOUND, channel.result
+        assert "error" in channel.json_body
+
 
 @patch(
     "famedly_control_synapse.client.FamedlyControlClient.get_group_members",

@@ -59,6 +59,7 @@ dependencies = [
 ]
 
 [tool.hatch.envs.hatch-static-analysis]
+installer = "uv"
 dependencies = [
   "black",
   "isort",
@@ -83,11 +84,15 @@ format-fix = [
   "black ."
 ]
 lint-check = [
+  "mypy --version",
   "mypy",
+  "ruff --version",
   "ruff check"
 ]
 lint-fix = [
+  "mypy --version",
   "mypy",
+  "ruff --version",
   "ruff check --fix"
 ]
 
