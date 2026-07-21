@@ -117,6 +117,19 @@ class TestManagedRoomCreation(ModuleApiTestCase):
         )
         assert account_data == {MANAGED_ROOM_TYPE: {"groups": ["test_group"]}}
 
+    def test_room_creation_requires_admin(self, mock_get_group_members) -> None:
+        """Only the configured Famedly Control admin may create rooms."""
+        self.register_user("create_non_admin", "password", admin=False)
+        non_admin_token = self.login("create_non_admin", "password")
+        channel = self.make_request(
+            method="POST",
+            path=self.CREATE_PATH,
+            content=self.room_config(),
+            access_token=non_admin_token,
+            shorthand=False,
+        )
+        assert channel.code == HTTPStatus.FORBIDDEN, channel.result
+
     def test_room_creation_invalid_body(self, mock_get_group_members) -> None:
         """Tests that invalid request body returns a 400 error with an error message"""
         channel = self.make_request(
@@ -475,6 +488,21 @@ class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
             assert (
                 channel.json_body["membership"] == "leave"
             ), f"Expected membership to be leave but got {channel.json_body['membership']} for member {member}"
+
+    def test_assign_groups_requires_admin(self, mock_get_group_members) -> None:
+        """Only the configured Famedly Control admin may assign groups."""
+        mock_get_group_members.return_value = []
+        room_id = self._create_managed_room(name="Room", groups=[])
+        self.register_user("assign_non_admin", "password", admin=False)
+        non_admin_token = self.login("assign_non_admin", "password")
+        channel = self.make_request(
+            method="POST",
+            path=self.BASE_PATH + f"/{room_id}/groups",
+            content={"groups": ["test_group"]},
+            access_token=non_admin_token,
+            shorthand=False,
+        )
+        assert channel.code == HTTPStatus.FORBIDDEN, channel.result
 
     def test_update_single_group_to_single_group(self, mock_get_group_members) -> None:
         """Tests that managed room which already have groups can be updated and the
