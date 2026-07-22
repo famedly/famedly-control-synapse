@@ -480,11 +480,28 @@ class ThreadedMemoryReactorClock(MemoryReactorClock):
 
             tls._get_default_clock = lambda: self
 
-        self.nameResolver = SimpleResolverComplexifier(FakeResolver())
         super().__init__()
 
+        # Override the default name resolver with our fake resolver. This must
+        # happen after `super().__init__()` so that the base class doesn't
+        # overwrite it again.
+        self.nameResolver = SimpleResolverComplexifier(FakeResolver())
+
+    def run(self) -> None:
+        """
+        Override the call from `MemoryReactorClock` to add an additional step that
+        cleans up any `whenRunningHooks` that have been called.
+        This is necessary for a clean shutdown to occur as these hooks can hold
+        references to the `SynapseHomeServer`.
+        """
+        super().run()
+
+        # `MemoryReactorClock` never clears the hooks that have already been called.
+        # So manually clear the hooks here after they have been run.
+        self.whenRunningHooks.clear()
+
     def installNameResolver(self, resolver: IHostnameResolver) -> IHostnameResolver:
-        raise NotImplementedError
+        raise NotImplementedError()
 
     def listenUDP(
         self,
@@ -523,10 +540,10 @@ class ThreadedMemoryReactorClock(MemoryReactorClock):
         *args: object,
         **kwargs: object,
     ) -> None:
-        raise NotImplementedError
+        raise NotImplementedError()
 
     def suggestThreadPoolSize(self, size: int) -> None:
-        raise NotImplementedError
+        raise NotImplementedError()
 
     def getThreadPool(self) -> "threadpool.ThreadPool":
         # Cast to match super-class.
