@@ -50,8 +50,8 @@ class _SyncTriggerJsonResource(JsonResource):
         super().__init__(hs)
         self._syncer = syncer
 
-    def render(self, request):
-        response_body = super().render(request)
+    async def _async_render(self, request):
+        response_body = await super()._async_render(request)
         self._syncer.start()
         return response_body
 
