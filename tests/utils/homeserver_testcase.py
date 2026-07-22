@@ -305,6 +305,7 @@ class HomeserverTestCase(TestCase):
         # see if we have any additional config for this test
         method = getattr(self, methodName)
         self._extra_config = getattr(method, "_extra_config", None)
+        self._extra_module_config = getattr(method, "_extra_module_config", None)
 
     def setUp(self) -> None:
         """
@@ -564,6 +565,17 @@ class HomeserverTestCase(TestCase):
         kwargs = dict(kwargs)
         kwargs.update(self._hs_args)
         config = self.default_config() if "config" not in kwargs else kwargs["config"]
+        # Now we can apply any overridden module settings from the override_module_settings decorator
+        if self._extra_module_config is not None:
+            # we are not in the business of adding these values. If you are using the decorator to override a setting,
+            # the base needs to exist first.
+            assert "modules" in config
+            assert config["modules"] is not None
+            assert isinstance(config["modules"], list)
+            assert len(config["modules"]) == 1
+            module_config = config["modules"][0]
+            # Merge top-level keys, but watch out for sub keys being overwritten instead!
+            module_config["config"].update(self._extra_module_config)
 
         # The server name can be specified using either the `name` argument or a config
         # override. The `name` argument takes precedence over any config overrides.
@@ -821,6 +833,33 @@ def override_config(extra_config: JsonDict) -> Callable[[TV], TV]:
     def decorator(func: TV) -> TV:
         # This attribute is being defined.
         func._extra_config = extra_config  # type: ignore[attr-defined]
+        return func
+
+    return decorator
+
+
+def override_module_config(extra_module_config: JsonDict) -> Callable[[TV], TV]:
+    """
+    A decorator which can be applied to test functions to give additional module config. This is a basic update()
+    from the "modules.0.config" standpoint, which is where all our useful config bits live at.
+
+    For use
+
+    For example:
+
+        class MyTestCase(HomeserverTestCase):
+            @override_module_config({"module_setting": False, ...})
+            def test_foo(self):
+                ...
+
+    Args:
+        extra_module_config: Additional config settings to be merged into the default
+            config dict before instantiating the test homeserver.
+    """
+
+    def decorator(func: TV) -> TV:
+        # This attribute is being defined.
+        func._extra_module_config = extra_module_config  # type: ignore[attr-defined]
         return func
 
     return decorator
