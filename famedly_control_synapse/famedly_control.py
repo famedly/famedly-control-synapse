@@ -51,9 +51,10 @@ class _SyncTriggerJsonResource(JsonResource):
         self._syncer = syncer
 
     async def _async_render(self, request):
-        response_body = await super()._async_render(request)
-        self._syncer.start()
-        return response_body
+        try:
+            return await super()._async_render(request)
+        finally:
+            self._syncer.start()
 
 
 class FamedlyControl:
