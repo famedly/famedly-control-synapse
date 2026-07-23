@@ -19,6 +19,7 @@ from famedly_control_synapse.room_handler import (
 )
 from famedly_control_synapse.sync import GroupMembershipSyncer
 from famedly_control_synapse.types import ManagedRoomRetryQueue
+from tests.utils.homeserver_testcase import override_module_config
 from tests.utils.module_api_testcase import ModuleApiTestCase
 
 
@@ -886,10 +887,12 @@ class RetryQueueTestCase(ModuleApiTestCase):
             not_room_id=room_id,
         )
 
+    @override_module_config({"error_retry_queue_enabled": False})
     def test_nonexistent_external_id_in_queue_success_via_sync_loop(self) -> None:
         """
         Test that a non-existent external id can be placed into the retry queue and
-        resolved via the sync loop once the user is created
+        resolved via the sync loop once the user is created. The retry queue is not enabled,
+        which only means that it will not process its entries but still stores the data
         """
         # Recall we have our basic member that will be added to the room. All further
         # testing actions will use this next group being defined.
@@ -955,13 +958,15 @@ class RetryQueueTestCase(ModuleApiTestCase):
             not_room_id=room_id,
         )
 
+    @override_module_config({"error_retry_queue_enabled": False})
     def test_nonexistent_external_id_in_queue_removed_by_sync_loop(
         self,
     ) -> None:
         """
         Test that a non-existent external user ID can be inserted into the retry queue
         and then removed when the group membership changes via the sync loop. The user
-        should not be in the room nor in the queue
+        should not be in the room nor in the queue. The retry queue is not enabled,
+        which only means that it will not process its entries but still stores the data
         """
         # Recall we have our basic member that will be added to the room. All further
         # testing actions will use this next group being defined.
@@ -993,9 +998,6 @@ class RetryQueueTestCase(ModuleApiTestCase):
 
         # This should update the retry queue and the no-op should occur
         self.wait_for_sync_loop()
-
-        # Bump the reactor so the retry queue processor has a chance to run
-        self.reactor.advance(7.0)
 
         # Test that user is not in room
         self.assert_users_in_room(room_id, [self.creator, self.base_room_member])
