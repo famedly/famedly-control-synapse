@@ -16,6 +16,19 @@ import pytest
 from pydantic import HttpUrl, ValidationError
 
 from famedly_control_synapse.famedly_control import FamedlyControl
+from tests.utils.jwt_keys import JWK_PATH, SERVICE_ACCOUNT_PATH
+
+
+def _jwt_auth(**overrides):
+    auth = {
+        "token_endpoint": "https://idp.example.com/oauth/v2/token",
+        "aud": "https://idp.example.com",
+        "iss": "service-user",
+        "sub": "service-user",
+        "jwk_path": JWK_PATH,
+    }
+    auth.update(overrides)
+    return auth
 
 
 class TestConfigParsing:
@@ -24,14 +37,14 @@ class TestConfigParsing:
         config_dict = {
             "famedly_control": {
                 "api_url": "https://api.example.com",
-                "access_token": "test_token_123",
+                "jwt_auth": _jwt_auth(),
             },
             "auth_provider": "https://idp.example.com/",
         }
         config = FamedlyControl.parse_config(config_dict)
 
         assert config.famedly_control.api_url == HttpUrl("https://api.example.com")
-        assert config.famedly_control.access_token == "test_token_123"
+        assert config.famedly_control.jwt_auth.jwk_path == JWK_PATH
         assert config.auth_provider == "https://idp.example.com/"
 
     def test_missing_famedly_control(self):
@@ -47,7 +60,7 @@ class TestConfigParsing:
         """Test that missing api_url raises ValidationError."""
         config_dict = {
             "famedly_control": {
-                "access_token": "test_token",
+                "jwt_auth": _jwt_auth(),
             },
             "auth_provider": "https://idp.example.com/",
         }
@@ -55,8 +68,8 @@ class TestConfigParsing:
         with pytest.raises(ValidationError):
             FamedlyControl.parse_config(config_dict)
 
-    def test_missing_access_token(self):
-        """Test that missing access_token raises ValidationError."""
+    def test_missing_jwt_auth(self):
+        """Test that missing jwt_auth raises ValidationError."""
         config_dict = {
             "famedly_control": {
                 "api_url": "https://api.example.com",
@@ -72,7 +85,7 @@ class TestConfigParsing:
         config_dict = {
             "famedly_control": {
                 "api_url": "ftp://example.com",
-                "access_token": "test_token",
+                "jwt_auth": _jwt_auth(),
             },
             "auth_provider": "https://idp.example.com/",
         }
@@ -80,12 +93,26 @@ class TestConfigParsing:
         with pytest.raises(ValidationError):
             FamedlyControl.parse_config(config_dict)
 
-    def test_empty_access_token(self):
-        """Test that empty access_token raises ValidationError."""
+    def test_no_key_source(self):
+        """Neither jwk_path nor zitadel_service_account_path set is rejected."""
+        auth = _jwt_auth()
+        del auth["jwk_path"]
+        config_dict = {
+            "famedly_control": {"api_url": "https://api.example.com", "jwt_auth": auth},
+            "auth_provider": "https://idp.example.com/",
+        }
+
+        with pytest.raises(ValidationError):
+            FamedlyControl.parse_config(config_dict)
+
+    def test_both_key_sources(self):
+        """Setting both key sources at once is rejected."""
         config_dict = {
             "famedly_control": {
                 "api_url": "https://api.example.com",
-                "access_token": "",
+                "jwt_auth": _jwt_auth(
+                    zitadel_service_account_path=SERVICE_ACCOUNT_PATH
+                ),
             },
             "auth_provider": "https://idp.example.com/",
         }
@@ -93,15 +120,34 @@ class TestConfigParsing:
         with pytest.raises(ValidationError):
             FamedlyControl.parse_config(config_dict)
 
-    def test_whitespace_only_access_token(self):
-        """Test that whitespace-only access_token raises ValidationError."""
+    def test_jwk_requires_iss_sub(self):
+        """iss and sub are required when using a raw JWK."""
+        auth = _jwt_auth()
+        del auth["iss"]
+        config_dict = {
+            "famedly_control": {"api_url": "https://api.example.com", "jwt_auth": auth},
+            "auth_provider": "https://idp.example.com/",
+        }
+
+        with pytest.raises(ValidationError):
+            FamedlyControl.parse_config(config_dict)
+
+    def test_service_account_without_iss_sub(self):
+        """A service account file may omit iss/sub (derived from userId)."""
         config_dict = {
             "famedly_control": {
                 "api_url": "https://api.example.com",
-                "access_token": "   ",
+                "jwt_auth": {
+                    "token_endpoint": "https://idp.example.com/oauth/v2/token",
+                    "aud": "https://idp.example.com",
+                    "zitadel_service_account_path": SERVICE_ACCOUNT_PATH,
+                },
             },
             "auth_provider": "https://idp.example.com/",
         }
-
-        with pytest.raises(ValidationError):
-            FamedlyControl.parse_config(config_dict)
+        config = FamedlyControl.parse_config(config_dict)
+        assert config.famedly_control.jwt_auth.iss is None
+        assert (
+            config.famedly_control.jwt_auth.zitadel_service_account_path
+            == SERVICE_ACCOUNT_PATH
+        )

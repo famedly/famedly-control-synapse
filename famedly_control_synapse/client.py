@@ -8,6 +8,7 @@ from synapse.module_api import ModuleApi
 from synapse.module_api.errors import Codes, SynapseError
 from synapse.types import JsonDict
 
+from famedly_control_synapse.auth import JwtTokenProvider
 from famedly_control_synapse.config import FamedlyControlConfig
 
 logger = logging.getLogger(__name__)
@@ -59,7 +60,7 @@ _ERROR_TYPE_TO_STATUS_CODE: dict[str, HTTPStatus] = {
 
 class FamedlyControlClient:
     def __init__(self, api: ModuleApi, config: FamedlyControlConfig):
-        self.access_token = config.famedly_control.access_token
+        self._auth = JwtTokenProvider(api, config.famedly_control.jwt_auth)
         self.url = config.famedly_control.api_url.encoded_string().rstrip("/")
         self.http_client = api.http_client
         self.sync = 0
@@ -77,10 +78,11 @@ class FamedlyControlClient:
                 failures, validation errors, or any other unexpected exception).
         """
         try:
+            token = await self._auth.get_access_token()
             response = await self.http_client.post_json_get_json(
                 uri,
                 body,
-                headers={"Authorization": [f"Bearer {self.access_token}"]},
+                headers={"Authorization": [f"Bearer {token}"]},
             )
             if "Ok" in response:
                 return model.model_validate(response["Ok"])

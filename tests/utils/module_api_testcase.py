@@ -34,6 +34,7 @@ from twisted.internet.testing import MemoryReactor
 
 import tests.utils.homeserver_testcase as synapsetest
 from famedly_control_synapse.rest.types import CreateManagedRoomRequest
+from tests.utils.jwt_keys import JWT_AUTH_CONFIG
 
 logger = logging.getLogger(__name__)
 # ruff: noqa: E501
@@ -104,7 +105,7 @@ class ModuleApiTestCase(synapsetest.HomeserverTestCase):
                     "config": {
                         "famedly_control": {
                             "api_url": "http://dummy.test/famedlyControl",
-                            "access_token": "dummy_token_for_testing",
+                            "jwt_auth": JWT_AUTH_CONFIG,
                         },
                         "auth_provider": "https://idp.example.com/",
                         "sync_enabled": False,

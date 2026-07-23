@@ -12,7 +12,14 @@
 #
 # You should have received a copy of the GNU Affero General Public License
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
-from pydantic import BaseModel, Field, HttpUrl, ValidationInfo, field_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    HttpUrl,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
 
 def _validate_not_blank(v: str, info: ValidationInfo) -> str:
@@ -21,20 +28,88 @@ def _validate_not_blank(v: str, info: ValidationInfo) -> str:
     return v
 
 
+class JwtAuthConfig(BaseModel):
+    """OAuth2 private-key-JWT authentication against an OIDC IdP (e.g. Zitadel).
+
+    The module signs a short-lived JWT assertion
+    with a private key and exchanges it at ``token_endpoint`` for an access token,
+    which is then used as the Bearer credential for Famedly Control requests. The
+    access token is refreshed automatically before it expires.
+    """
+
+    token_endpoint: HttpUrl = Field(
+        ...,
+        description="Token exchange endpoint, e.g. https://${CUSTOM_DOMAIN}/oauth/v2/token",
+    )
+    aud: str = Field(
+        ...,
+        min_length=1,
+        description="Audience of the JWT assertion; the domain of the Zitadel instance",
+    )
+    iss: str | None = Field(
+        default=None,
+        description="Issuer of the JWT assertion; the service user id. Required unless "
+        "derivable from the Zitadel service account file.",
+    )
+    sub: str | None = Field(
+        default=None,
+        description="Subject of the JWT assertion; the service user id. Required unless "
+        "derivable from the Zitadel service account file.",
+    )
+    scopes: list[str] = Field(
+        default_factory=list,
+        description="Scopes requested during the token exchange. 'openid' is always "
+        "added, so this is optional if that is the only scope needed.",
+    )
+    token_lifetime: int = Field(
+        default=3600,
+        ge=1,
+        description="Lifetime in seconds of the signed JWT assertion; used to compute "
+        "the 'exp' claim from 'iat'.",
+    )
+    jwk_path: str | None = Field(
+        default=None,
+        description="Path to a JSON Web Key holding the private key, with 'kid' and 'alg' "
+        "set. Required unless zitadel_service_account_path is set.",
+    )
+    zitadel_service_account_path: str | None = Field(
+        default=None,
+        description="Path to a Zitadel service account JSON (RSA private key + keyId + "
+        "userId). Converted internally to a JWK. Alternative to jwk_path.",
+    )
+
+    @field_validator("aud")
+    @classmethod
+    def validate_aud(cls, v: str, info: ValidationInfo) -> str:
+        return _validate_not_blank(v, info)
+
+    @field_validator("iss", "sub")
+    @classmethod
+    def validate_iss_sub(cls, v: str | None, info: ValidationInfo) -> str | None:
+        # Optional, but if given they must not be whitespace-only.
+        return v if v is None else _validate_not_blank(v, info)
+
+    @model_validator(mode="after")
+    def validate_key_source(self) -> "JwtAuthConfig":
+        if bool(self.jwk_path) == bool(self.zitadel_service_account_path):
+            raise ValueError(
+                "exactly one of jwk_path or zitadel_service_account_path must be set"
+            )
+        # iss/sub can be derived from the service account file's userId; when using a
+        # raw JWK there is no such fallback, so they must be provided explicitly.
+        if self.jwk_path and (not self.iss or not self.sub):
+            raise ValueError("iss and sub are required when using jwk_path")
+        return self
+
+
 class FamedlyControlApiConfig(BaseModel):
     api_url: HttpUrl = Field(
         ..., description="HTTP or HTTPS URL for the Famedly Control API"
     )
-    access_token: str = Field(
+    jwt_auth: JwtAuthConfig = Field(
         ...,
-        min_length=1,
-        description="Access token to authenticate against Famedly Control",
+        description="OAuth2 private-key-JWT authentication against the IdP",
     )
-
-    @field_validator("access_token")
-    @classmethod
-    def validate_token_fields(cls, v: str, info: ValidationInfo) -> str:
-        return _validate_not_blank(v, info)
 
 
 class FamedlyControlConfig(BaseModel):
