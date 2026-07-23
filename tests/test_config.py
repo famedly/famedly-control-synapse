@@ -27,17 +27,20 @@ class TestConfigParsing:
                 "access_token": "test_token_123",
             },
             "auth_provider": "https://idp.example.com/",
+            "admin_user": "admin",
         }
         config = FamedlyControl.parse_config(config_dict)
 
         assert config.famedly_control.api_url == HttpUrl("https://api.example.com")
         assert config.famedly_control.access_token == "test_token_123"
         assert config.auth_provider == "https://idp.example.com/"
+        assert config.admin_user == "admin"
 
     def test_missing_famedly_control(self):
         """Test that missing famedly_control raises ValidationError."""
         config_dict = {
             "auth_provider": "https://idp.example.com/",
+            "admin_user": "admin",
         }
 
         with pytest.raises(ValidationError):
@@ -50,6 +53,7 @@ class TestConfigParsing:
                 "access_token": "test_token",
             },
             "auth_provider": "https://idp.example.com/",
+            "admin_user": "admin",
         }
 
         with pytest.raises(ValidationError):
@@ -62,6 +66,7 @@ class TestConfigParsing:
                 "api_url": "https://api.example.com",
             },
             "auth_provider": "https://idp.example.com/",
+            "admin_user": "admin",
         }
 
         with pytest.raises(ValidationError):
@@ -75,6 +80,7 @@ class TestConfigParsing:
                 "access_token": "test_token",
             },
             "auth_provider": "https://idp.example.com/",
+            "admin_user": "admin",
         }
 
         with pytest.raises(ValidationError):
@@ -88,6 +94,7 @@ class TestConfigParsing:
                 "access_token": "",
             },
             "auth_provider": "https://idp.example.com/",
+            "admin_user": "admin",
         }
 
         with pytest.raises(ValidationError):
@@ -101,6 +108,53 @@ class TestConfigParsing:
                 "access_token": "   ",
             },
             "auth_provider": "https://idp.example.com/",
+            "admin_user": "admin",
+        }
+
+        with pytest.raises(ValidationError):
+            FamedlyControl.parse_config(config_dict)
+
+    def test_missing_admin_user(self):
+        """Test that missing admin_user raises ValidationError."""
+        config_dict = {
+            "famedly_control": {
+                "api_url": "https://api.example.com",
+                "access_token": "test_token",
+            },
+            "auth_provider": "https://idp.example.com/",
+        }
+
+        with pytest.raises(ValidationError):
+            FamedlyControl.parse_config(config_dict)
+
+    def test_empty_admin_user(self):
+        """Test that empty admin_user raises ValidationError."""
+        config_dict = {
+            "famedly_control": {
+                "api_url": "https://api.example.com",
+                "access_token": "test_token",
+            },
+            "auth_provider": "https://idp.example.com/",
+            "admin_user": "",
+        }
+
+        with pytest.raises(ValidationError):
+            FamedlyControl.parse_config(config_dict)
+
+    @pytest.mark.parametrize(
+        "admin_user",
+        ["@admin:example.com", "@admin", "admin:example.com", "   "],
+    )
+    def test_invalid_admin_user(self, admin_user):
+        """Test that a full MXID or whitespace-only admin_user raises
+        ValidationError; only a localpart is accepted."""
+        config_dict = {
+            "famedly_control": {
+                "api_url": "https://api.example.com",
+                "access_token": "test_token",
+            },
+            "auth_provider": "https://idp.example.com/",
+            "admin_user": admin_user,
         }
 
         with pytest.raises(ValidationError):

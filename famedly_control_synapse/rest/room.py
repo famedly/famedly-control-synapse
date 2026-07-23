@@ -46,6 +46,35 @@ def famedly_control_patterns(path_regex: str) -> Iterable[Pattern]:
     return patterns
 
 
+async def assert_famedly_control_admin(
+    api: ModuleApi, request: SynapseRequest, admin_user: str
+) -> str:
+    """Authenticate the request and ensure the caller is the single configured
+    Famedly Control admin.
+
+    Args:
+        api: The module API used to resolve the requesting user.
+        request: The incoming HTTP request.
+        admin_user: The configured Famedly Control admin Matrix user ID.
+
+    Returns:
+        The requesting user's Matrix user ID (equal to ``admin_user``).
+
+    Raises:
+        FamedlyControlError: A 403 if the caller is not the configured admin or is
+            not a server administrator.
+    """
+    requester = await api.get_user_by_req(request)
+    user_id = requester.user.to_string()
+    if user_id != admin_user or not await api.is_user_admin(user_id):
+        raise FamedlyControlError(
+            403,
+            "Only the configured Famedly Control admin may call this API",
+            errcode=Codes.FORBIDDEN,
+        )
+    return user_id
+
+
 class CreateManagedRoomResource(RestServlet):
     """Resource for creating a new managed room."""
 
@@ -56,19 +85,19 @@ class CreateManagedRoomResource(RestServlet):
         api: ModuleApi,
         room_handler: ManagedRoomHandler,
         repository: ManagedRoomRepository,
+        admin_user: str,
     ) -> None:
         super().__init__()
         self.api = api
         self.room_handler = room_handler
         self.repository = repository
+        self.admin_user = admin_user
 
     async def on_POST(self, request: SynapseRequest) -> tuple[int, JsonDict]:
         """Handle POST requests to create a new managed room."""
-        requester = await self.api.get_user_by_req(request)
-        admin_user_id = requester.user.to_string()
-
-        if not await self.api.is_user_admin(admin_user_id):
-            raise FamedlyControlError(403, "User is not administrator", Codes.FORBIDDEN)
+        admin_user_id = await assert_famedly_control_admin(
+            self.api, request, self.admin_user
+        )
 
         room_config = parse_json_object_from_request(request)
 
@@ -183,20 +212,17 @@ class ListManagedRoomsResource(RestServlet):
 
     PATTERNS = famedly_control_patterns("/rooms")
 
-    def __init__(self, api: ModuleApi, repository: ManagedRoomRepository) -> None:
+    def __init__(
+        self, api: ModuleApi, repository: ManagedRoomRepository, admin_user: str
+    ) -> None:
         super().__init__()
         self.api = api
         self.repo = repository
+        self.admin_user = admin_user
 
     async def on_GET(self, request: SynapseRequest) -> tuple[int, JsonDict]:
         """Handle GET requests to list managed rooms."""
-        requester = await self.api.get_user_by_req(request)
-        user_id = requester.user.to_string()
-
-        if not await self.api.is_user_admin(user_id):
-            raise FamedlyControlError(
-                403, "User is not administrator", errcode=Codes.FORBIDDEN
-            )
+        await assert_famedly_control_admin(self.api, request, self.admin_user)
 
         # The 'from' query parameter is labeled as a string in the openapi spec, but is
         # passed directly into the sql query which expects it to be an integer(for
@@ -263,21 +289,19 @@ class GetManagedRoomResource(RestServlet):
     # Synapse then matches first (routes are checked in registration order).
     PATTERNS = famedly_control_patterns("/(?P<room_id>[^/]*)$")
 
-    def __init__(self, api: ModuleApi, repository: ManagedRoomRepository) -> None:
+    def __init__(
+        self, api: ModuleApi, repository: ManagedRoomRepository, admin_user: str
+    ) -> None:
         super().__init__()
         self.api = api
         self.repo = repository
+        self.admin_user = admin_user
 
     async def on_GET(
         self, request: SynapseRequest, room_id: str
     ) -> tuple[int, JsonDict]:
         """Handle GET requests to fetch a single managed room."""
-        requester = await self.api.get_user_by_req(request)
-        user_id = requester.user.to_string()
-        if not await self.api.is_user_admin(user_id):
-            raise FamedlyControlError(
-                403, "User is not administrator", errcode=Codes.FORBIDDEN
-            )
+        await assert_famedly_control_admin(self.api, request, self.admin_user)
 
         entry = await self.repo.get_managed_room(room_id)
         if entry is None:
@@ -298,11 +322,13 @@ class AssignGroupsToManagedRoomResource(RestServlet):
         api: ModuleApi,
         room_handler: ManagedRoomHandler,
         repository: ManagedRoomRepository,
+        admin_user: str,
     ) -> None:
         super().__init__()
         self.api = api
         self.room_handler = room_handler
         self.repository = repository
+        self.admin_user = admin_user
 
     async def on_POST(
         self, request: SynapseRequest, room_id: str
@@ -312,12 +338,7 @@ class AssignGroupsToManagedRoomResource(RestServlet):
         _ = RoomID.from_string(room_id)
 
         # Validate user permissions
-        requester = await self.api.get_user_by_req(request)
-        user_id = requester.user.to_string()
-        if not await self.api.is_user_admin(user_id):
-            raise FamedlyControlError(
-                403, "User is not administrator", errcode=Codes.FORBIDDEN
-            )
+        user_id = await assert_famedly_control_admin(self.api, request, self.admin_user)
 
         # Validate if it's a managed room
         if not await self.repository.is_managed_room(room_id, user_id):

@@ -3,6 +3,10 @@ info:
   title: Famedly Managed Room API
   description: >
     API for creating and managing Famedly managed rooms.
+
+    Access is restricted to a single Matrix user, configured on the server via the
+    module's `admin_user` config option. Every request from any other user (including other
+    server admins) is rejected with `403 M_FORBIDDEN`.
   version: "0.0.4"
 servers:
   - url: https://example.com

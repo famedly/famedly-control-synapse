@@ -36,6 +36,7 @@ def _make_client(api_url: str):
             "access_token": "test_token",
         },
         auth_provider="https://idp.example.com/",
+        admin_user="admin",
     )
     api = MagicMock()
     api.http_client = MagicMock()
