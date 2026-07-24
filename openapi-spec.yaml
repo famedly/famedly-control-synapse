@@ -57,11 +57,14 @@ paths:
                     The power level content to override in the default power level event.
                 room_version:
                   type: string
-                  description: The room version to use.
+                  description: >
+                    The room version to use. Defaults to the server's
+                    configured default room version.
                 groups:
                   type: array
                   description: >
                     List of group IDs to be stored in the de.famedly.managedRoom account data.
+                    Defaults to an empty list.
                   items:
                     type: string
               example:
