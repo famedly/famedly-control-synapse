@@ -256,6 +256,22 @@ paths:
                     example: "!sefiuhWgwghwWgh:example.com"
                   groups:
                     $ref: "#/components/schemas/GroupList"
+        "404":
+          description: An unknown room was used for this request
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error, errcode]
+                properties:
+                  error:
+                    type: string
+                    description: A meaningful error message
+                    example: "Room is unknown or otherwise doesn't exist"
+                  errcode:
+                    type: string
+                    description: A meaningful string error code. M_UNKNOWN is used to show an unknown room
+                    example: "M_UNKNOWN"
 
 components:
   securitySchemes:

@@ -1,17 +1,18 @@
 import logging
 from dataclasses import dataclass, field
+from http import HTTPStatus
 from itertools import chain
 from typing import Collection, Iterable
 
 from prometheus_client import Counter, Gauge
 from synapse.api.constants import EventContentFields, EventTypes, Membership
-from synapse.api.errors import UnstableSpecAuthError
+from synapse.api.errors import NotFoundError, UnstableSpecAuthError
 from synapse.events import EventBase
 from synapse.logging.context import make_deferred_yieldable
 from synapse.metrics import SERVER_NAME_LABEL
 from synapse.module_api import ModuleApi
 from synapse.module_api.errors import Codes
-from synapse.types import StateMap, create_requester
+from synapse.types import StateMap, UserID, create_requester
 from synapse.util.duration import Duration
 from twisted.internet.defer import Deferred, DeferredLock
 
@@ -82,6 +83,7 @@ class ManagedRoomHandler:
         self.client = client
         self.account_data_handler = self.api._hs.get_account_data_handler()
         self.server_name = api.server_name
+        self.admin_user = UserID(config.admin_user, self.server_name).to_string()
         self.repository = repository
         self.retry_queue = ManagedRoomRetryQueue()
         self.retry_queue_process_running = False
@@ -172,6 +174,7 @@ class ManagedRoomHandler:
         errors: dict[str, str] = {}
         if not user_mxids:
             return errors
+
         # Prepare a state mapping for the users that are interesting
         state_map = await self.get_users_room_membership(room_id, user_mxids)
         requester = create_requester(admin_user_id)
@@ -243,6 +246,39 @@ class ManagedRoomHandler:
                     error_code=self.get_error_code_from_exception(e)
                 )
         return errors
+
+    async def _assert_room_exists(self, room_id: str) -> None:
+        """
+        Does the room still exist? Raises a `NotFoundError` if it does not.
+        """
+        # A simple check that a room exists using a cached database call to verify that, so should be fairly low
+        # impact. Discard the value as it has no use, if the room doesn't exist it will raise the NotFoundError.
+        await self.api._hs.get_datastores().main.get_room_version_id(room_id)
+
+    async def maybe_drop_room_from_retry_queue(self, room_id: str) -> bool:
+        """
+        Drop the room from the retry queue so it will not be tried again if it does not exist.
+
+        Args:
+            room_id: The ID of the room to drop.
+            lock_held: bool to indicate that the lock is already held by an external calling function.
+
+        Returns:
+            Bool describing if the room does not exist.
+        """
+        try:
+            # Raises `NotFoundError` if the room is unknown/doesn't exist.
+            await self._assert_room_exists(room_id)
+            return False
+        except NotFoundError:
+            # The room does not exist any more, just remove the entries and drop them on the floor. Apply the default
+            # to avoid a KeyError exception, just in case it was already dropped by some other process trying to
+            # compete.
+            async with self.retry_queue_lock:
+                self.retry_queue.rooms.pop(room_id, None)
+                await self.save_retry_queue_snapshot(self.admin_user)
+            # TODO: add in metrics for this? api.errors.Codes does not have a proper "M_UNKNOWN_ROOM" code to use
+            return True
 
     async def remove_users_from_room(
         self, creator_id: str, user_mxids: Collection[str], room_id: str
@@ -356,6 +392,11 @@ class ManagedRoomHandler:
             external_ids_to_add: External user IDs to invite/join. Can be empty list
             external_ids_to_remove: External user IDs to remove. Can be empty list
         """
+        # First find out if the room even still exists
+        if await self.maybe_drop_room_from_retry_queue(room_id):
+            # There seems to be nothing more to do here, just return
+            return
+
         mxids_to_add_mapping = (
             await self.batch_convert_external_user_ids_to_matrix_user_ids(
                 external_ids_to_add
@@ -462,7 +503,11 @@ class ManagedRoomHandler:
 
         Returns:
             The Matrix user ID of the room creator.
+
+        Raises: NotFoundError if the room does not exist.
         """
+        # This function will raise `NotFoundError`
+        await self._assert_room_exists(room_id)
         state_map = await self.api.get_room_state(
             room_id=room_id, event_filter=[CREATE_EVENT_FILTER]
         )
@@ -495,6 +540,9 @@ class ManagedRoomHandler:
         expected_member_external_ids: set[str] = set()
         for group_id in list_of_groups:
             members = await self.client.get_group_members(group_id)
+            if not members:
+                logger.warning("The requested group had no members: %s", group_id)
+
             expected_member_external_ids.update(members)
         return expected_member_external_ids
 
@@ -518,14 +566,6 @@ class ManagedRoomHandler:
         room to avoid a partial room), they can be passed in via
         ``expected_member_external_ids`` to avoid fetching them again.
         """
-        # Update room account data with new groups information
-        await self.account_data_handler.add_account_data_to_room(
-            admin_user,
-            room_id,
-            MANAGED_ROOM_TYPE,
-            {"groups": list_of_groups},
-        )
-
         # Get the new groups member state (desired state after update)
         if expected_member_external_ids is None:
             try:
@@ -539,6 +579,23 @@ class ManagedRoomHandler:
                     additional_fields={"room_id": room_id, "groups": list_of_groups},
                 )
 
+        # Verify that a room exists before making any changes
+        try:
+            room_creator = await self.get_room_creator(room_id)
+        except NotFoundError:
+            # uh, oh. Lost a room somewhere
+            logger.warning(
+                "The room requested for having groups assigned does not appear to exist: %s",
+                room_id,
+            )
+            await self.maybe_drop_room_from_retry_queue(room_id)
+            # For lack of a better errcode, just say it is an unknown
+            raise FamedlyControlError(
+                HTTPStatus.NOT_FOUND,
+                "Room is unknown or otherwise doesn't exist",
+                Codes.UNKNOWN,
+            )
+
         member_mxids_mapping = (
             await self.batch_convert_external_user_ids_to_matrix_user_ids(
                 list(expected_member_external_ids)
@@ -546,6 +603,14 @@ class ManagedRoomHandler:
         )
         not_found_external_ids = parse_missing_items(
             member_mxids_mapping.keys(), expected_member_external_ids
+        )
+
+        # Update room account data with new groups information
+        await self.account_data_handler.add_account_data_to_room(
+            admin_user,
+            room_id,
+            MANAGED_ROOM_TYPE,
+            {"groups": list_of_groups},
         )
 
         async with self.retry_queue_lock:
@@ -578,8 +643,6 @@ class ManagedRoomHandler:
         members_to_add = expected_members - current_members
         members_to_remove = current_members - expected_members
 
-        # Prevent the room creator/admin from the membership changes.
-        room_creator = await self.get_room_creator(room_id)
         if room_creator:
             members_to_add.discard(room_creator)
             members_to_remove.discard(room_creator)
@@ -669,7 +732,17 @@ class ManagedRoomHandler:
         self.retry_queue_process_running = True
 
         async with self.retry_queue_lock:
+            rooms_to_delete = set()
             for room_id, room_queue in self.retry_queue.rooms.items():
+                # First find out if the room even still exists
+                try:
+                    await self._assert_room_exists(room_id)
+                except NotFoundError:
+                    # To avoid iterable changing size during processing, save this room_id to remove at the appropriate
+                    # spot below, but otherwise spend no more time on it
+                    rooms_to_delete.add(room_id)
+                    continue
+
                 # Collect all the various ID's for a given room, then can remove them all
                 # at once at the end and avoid "dictionary changed size while iterating"
                 external_ids_to_remove: set[str] = set()
@@ -696,7 +769,14 @@ class ManagedRoomHandler:
                         external_id,
                     )
 
-                room_creator = await self.get_room_creator(room_id)
+                # This could raise, but it's unlikely. Trap it anyway, just in case
+                try:
+                    room_creator = await self.get_room_creator(room_id)
+                except NotFoundError:
+                    rooms_to_delete.add(room_id)
+                    # May as well move on, no sense processing more of this room
+                    continue
+
                 for mxid, action_reason in room_queue.members.items():
                     if action_reason.is_removal is True:
                         returned_errors = await self.remove_users_from_room(
@@ -720,10 +800,10 @@ class ManagedRoomHandler:
                 for mxid in mxids_to_remove:
                     self.retry_queue.rooms[room_id].members.pop(mxid, None)
 
-            # Clean up now unused room entries that are empty
+            # Clean up now unused room entries that are empty or for rooms that were deleted
             retry_queue_copy = self.retry_queue.rooms.copy()
             for room_id, room_queue in retry_queue_copy.items():
-                if not room_queue:
+                if not room_queue or room_id in rooms_to_delete:
                     self.retry_queue.rooms.pop(room_id)
 
             # Process some metric numbers

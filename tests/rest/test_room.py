@@ -1258,6 +1258,138 @@ class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
         )
         assert channel.code == HTTPStatus.NOT_FOUND, channel.result
 
+    def test_nonexistent_room(self, mock_get_group_members) -> None:
+        """
+        Test that a nonexistent room raises a not found error
+        """
+        room_id = "!fake_room_does_not_exist:test"
+
+        # invitee will be in a group that we will attempt to add to the room
+        mock_get_group_members.side_effect = [self.invitee]
+
+        channel = self.make_request(
+            method="POST",
+            path=self.BASE_PATH + f"/{room_id}/groups",
+            content={"groups": ["group_of_silly_people"]},
+            access_token=self.creator_access_token,
+            shorthand=False,
+        )
+        assert channel.code == HTTPStatus.NOT_FOUND, channel.result
+        assert "error" in channel.json_body
+
+    def _get_users_in_room(self, room_id: str) -> list[str]:
+        state_map = self.get_success(
+            self.hs.get_storage_controllers().state.get_current_state(
+                room_id,
+                StateFilter.from_types(
+                    [
+                        (EventTypes.Member, None),
+                    ]
+                ),
+            )
+        )
+        list_of_members = [
+            state_key
+            for (_, state_key), event_base in state_map.items()
+            if (
+                event_base.content["membership"] == "join"
+                or event_base.content["membership"] == "invite"
+            )
+        ]
+        return list_of_members
+
+    def test_nonexistent_group(self, mock_get_group_members) -> None:
+        """
+        Test that a nonexistent group does not break the world
+        """
+        # We really do not have clarity on what a non-existent group looks like as a response from downstream, as in we
+        # do not know if it is considered a 502 for an "Api" error or a 500 for "Internal". It is probably not going to
+        # be a "Forbidden" or an "Unauthorized" so that can be excluded from this test
+
+        # We'll have a dummy room with no groups assigned yet. Then we will keep trying to assign groups with
+        # members, but each time something will be wrong so nothing should happen
+        channel = self.make_request(
+            method="POST",
+            path=self.CREATE_PATH,
+            content={
+                "name": "Short lived room",
+                "room_alias_name": "Not-gonna-last-long",
+                "groups": [],
+            },
+            access_token=self.creator_access_token,
+            shorthand=False,
+        )
+        assert channel.code == HTTPStatus.OK, channel.result
+        assert "room_id" in channel.json_body
+        room_id = channel.json_body["room_id"]
+
+        # If the backend returns an Internal Server Error(it will have a `Err.type="Internal"` look to it) from the
+        # infallable API it will look something like this after our client spits it back out
+        mock_get_group_members.side_effect = FamedlyControlError(
+            HTTPStatus.INTERNAL_SERVER_ERROR, "Dingaling a ding dong!"
+        )
+        channel = self.make_request(
+            method="POST",
+            path=self.BASE_PATH + f"/{room_id}/groups",
+            content={"groups": ["missing_group"]},
+            access_token=self.creator_access_token,
+            shorthand=False,
+        )
+
+        assert channel.code == HTTPStatus.INTERNAL_SERVER_ERROR, channel.result
+        assert "groups" in channel.json_body
+        members_list = self._get_users_in_room(room_id)
+        assert (
+            len(members_list) == 1
+        ), "(step one)Room should have only member, the room creator"
+
+        mock_get_group_members.side_effect = FamedlyControlError(
+            HTTPStatus.BAD_GATEWAY, "Whoops! I slipped"
+        )
+        channel = self.make_request(
+            method="POST",
+            path=self.BASE_PATH + f"/{room_id}/groups",
+            content={"groups": ["ghost_adventures"]},
+            access_token=self.creator_access_token,
+            shorthand=False,
+        )
+        assert channel.code == HTTPStatus.BAD_GATEWAY, channel.result
+        assert "groups" in channel.json_body
+        members_list = self._get_users_in_room(room_id)
+        assert (
+            len(members_list) == 1
+        ), "(step two)Room should have only member, the room creator"
+
+        # Now check for multiple groups, where one exists but another does not. Start with a real one. Invitee exists
+        # already so make another user we can play with.
+        user_that_will_never_get_to_join = self.register_user(
+            "hard_to_find_user", "password"
+        )
+
+        good_group = "gets_to_join"
+        missing_group = "missing_group"
+
+        mock_get_group_members.side_effect = (
+            [self.invitee],
+            FamedlyControlError(HTTPStatus.INTERNAL_SERVER_ERROR, "Boom!"),
+        )
+
+        channel = self.make_request(
+            method="POST",
+            path=self.BASE_PATH + f"/{room_id}/groups",
+            content={"groups": [good_group, missing_group]},
+            access_token=self.creator_access_token,
+            shorthand=False,
+        )
+        assert channel.code == HTTPStatus.INTERNAL_SERVER_ERROR, channel.result
+        assert "groups" in channel.json_body
+        members_list = self._get_users_in_room(room_id)
+        assert (
+            len(members_list) == 1
+        ), "(step three)Room should have only member, the room creator"
+        assert self.creator in members_list, members_list
+        assert user_that_will_never_get_to_join not in members_list, members_list
+
 
 @patch(
     "famedly_control_synapse.client.FamedlyControlClient.get_group_members",

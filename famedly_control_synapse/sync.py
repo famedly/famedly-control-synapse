@@ -146,7 +146,7 @@ class GroupMembershipSyncer:
             for group_id, diffs in response.data.items():
                 rooms = group_rooms.get(group_id, [])
                 if not rooms:
-                    logger.debug(
+                    logger.warning(
                         "Received diff for group %s but no managed rooms use it",
                         group_id,
                     )
