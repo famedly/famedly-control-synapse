@@ -37,6 +37,7 @@ def _make_client(api_url: str):
             "jwt_auth": JWT_AUTH_CONFIG,
         },
         auth_provider="https://idp.example.com/",
+        admin_user="admin",
     )
     api = MagicMock()
     api.http_client = MagicMock()

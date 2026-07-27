@@ -3,6 +3,10 @@ info:
   title: Famedly Managed Room API
   description: >
     API for creating and managing Famedly managed rooms.
+
+    Access is restricted to a single Matrix user, configured on the server via the
+    module's `admin_user` config option. Every request from any other user (including other
+    server admins) is rejected with `403 M_FORBIDDEN`.
   version: "0.0.4"
 servers:
   - url: https://example.com
@@ -53,11 +57,14 @@ paths:
                     The power level content to override in the default power level event.
                 room_version:
                   type: string
-                  description: The room version to use.
+                  description: >
+                    The room version to use. Defaults to the server's
+                    configured default room version.
                 groups:
                   type: array
                   description: >
                     List of group IDs to be stored in the de.famedly.managedRoom account data.
+                    Defaults to an empty list.
                   items:
                     type: string
               example:

@@ -117,6 +117,19 @@ class TestManagedRoomCreation(ModuleApiTestCase):
         )
         assert account_data == {MANAGED_ROOM_TYPE: {"groups": ["test_group"]}}
 
+    def test_room_creation_requires_admin(self, mock_get_group_members) -> None:
+        """Only the configured Famedly Control admin may create rooms."""
+        self.register_user("create_non_admin", "password", admin=False)
+        non_admin_token = self.login("create_non_admin", "password")
+        channel = self.make_request(
+            method="POST",
+            path=self.CREATE_PATH,
+            content=self.room_config(),
+            access_token=non_admin_token,
+            shorthand=False,
+        )
+        assert channel.code == HTTPStatus.FORBIDDEN, channel.result
+
     def test_room_creation_invalid_body(self, mock_get_group_members) -> None:
         """Tests that invalid request body returns a 400 error with an error message"""
         channel = self.make_request(
@@ -132,10 +145,35 @@ class TestManagedRoomCreation(ModuleApiTestCase):
             "Invalid request body" in channel.json_body["error"]
         ), "Response should contain an error message"
 
-    def test_room_creation_with_missing_required_fields(
-        self, mock_get_group_members
-    ) -> None:
-        """Tests that missing required fields in the request body returns a 400 error with an error message"""
+    def test_room_creation_with_no_fields(self, mock_get_group_members) -> None:
+        """No fields are required: an empty request body creates a managed room
+        with no alias, no name, no groups assigned, and the server's default room
+        version."""
+        channel = self.make_request(
+            method="POST",
+            path=self.CREATE_PATH,
+            content={},
+            access_token=self.creator_access_token,
+            shorthand=False,
+        )
+
+        assert channel.code == HTTPStatus.OK, channel.result
+        assert "room_id" in channel.json_body, channel.result
+        room_id = channel.json_body["room_id"]
+        assert channel.json_body["groups"] == []
+
+        # No groups means no members were looked up.
+        mock_get_group_members.assert_not_called()
+
+        # The room is still a managed room, with an empty group list persisted.
+        account_data = self.get_success(
+            self.store.get_account_data_for_room(self.creator, room_id)
+        )
+        assert account_data == {MANAGED_ROOM_TYPE: {"groups": []}}
+
+    def test_room_creation_with_partial_fields(self, mock_get_group_members) -> None:
+        """A request providing only some optional fields (here just the name) is
+        accepted rather than rejected for missing fields."""
         channel = self.make_request(
             method="POST",
             path=self.CREATE_PATH,
@@ -144,10 +182,9 @@ class TestManagedRoomCreation(ModuleApiTestCase):
             shorthand=False,
         )
 
-        assert channel.code == HTTPStatus.BAD_REQUEST, channel.result
-        assert (
-            "Invalid request body" in channel.json_body["error"]
-        ), "Response should contain an error message"
+        assert channel.code == HTTPStatus.OK, channel.result
+        assert "room_id" in channel.json_body, channel.result
+        assert channel.json_body["groups"] == []
 
     def test_default_room_powerlevels(self, mock_get_group_members) -> None:
         """Test that a room's default powerlevels are as expected"""
@@ -591,6 +628,21 @@ class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
             assert (
                 channel.json_body["membership"] == "leave"
             ), f"Expected membership to be leave but got {channel.json_body['membership']} for member {member}"
+
+    def test_assign_groups_requires_admin(self, mock_get_group_members) -> None:
+        """Only the configured Famedly Control admin may assign groups."""
+        mock_get_group_members.return_value = []
+        room_id = self._create_managed_room(name="Room", groups=[])
+        self.register_user("assign_non_admin", "password", admin=False)
+        non_admin_token = self.login("assign_non_admin", "password")
+        channel = self.make_request(
+            method="POST",
+            path=self.BASE_PATH + f"/{room_id}/groups",
+            content={"groups": ["test_group"]},
+            access_token=non_admin_token,
+            shorthand=False,
+        )
+        assert channel.code == HTTPStatus.FORBIDDEN, channel.result
 
     def test_update_single_group_to_single_group(self, mock_get_group_members) -> None:
         """Tests that managed room which already have groups can be updated and the

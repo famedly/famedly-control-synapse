@@ -21,7 +21,7 @@ from synapse.events import EventBase
 from synapse.http.server import JsonResource
 from synapse.module_api import ModuleApi
 from synapse.module_api.errors import Codes, SynapseError
-from synapse.types import StateMap
+from synapse.types import StateMap, UserID
 
 from famedly_control_synapse.client import FamedlyControlClient
 from famedly_control_synapse.config import FamedlyControlConfig
@@ -81,18 +81,26 @@ class FamedlyControl:
                 self.room_handler._load_queue_snapshot
             )
 
+            # The admin is always a local user, so its full Matrix user ID is the
+            # configured localpart combined with this server's name.
+            admin_user = UserID(config.admin_user, self.server_name).to_string()
+
             # Register servlets
             self.resource = _SyncTriggerJsonResource(self.api._hs, self.syncer)
             CreateManagedRoomResource(
-                self.api, self.room_handler, self.repository
+                self.api, self.room_handler, self.repository, admin_user
             ).register(self.resource)
-            ListManagedRoomsResource(self.api, self.repository).register(self.resource)
+            ListManagedRoomsResource(self.api, self.repository, admin_user).register(
+                self.resource
+            )
             # Registered after ListManagedRoomsResource: its '/{room_id}$' pattern
             # also matches '/rooms', so the literal '/rooms' route must be checked
             # first (Synapse matches routes in registration order).
-            GetManagedRoomResource(self.api, self.repository).register(self.resource)
+            GetManagedRoomResource(self.api, self.repository, admin_user).register(
+                self.resource
+            )
             AssignGroupsToManagedRoomResource(
-                self.api, self.room_handler, self.repository
+                self.api, self.room_handler, self.repository, admin_user
             ).register(self.resource)
             self.api.register_web_resource(MANAGED_ROOM_API_PREFIX, self.resource)
 

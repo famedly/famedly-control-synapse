@@ -108,6 +108,10 @@ class ModuleApiTestCase(synapsetest.HomeserverTestCase):
                             "jwt_auth": JWT_AUTH_CONFIG,
                         },
                         "auth_provider": "https://idp.example.com/",
+                        # The homeserver name defaults to "test" (see
+                        # tests.utils.config.default_config), so this localpart
+                        # resolves to the Matrix user ID "@room_creator:test".
+                        "admin_user": "room_creator",
                         "sync_enabled": False,
                         "error_retry_queue_enabled": False,
                     },

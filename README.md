@@ -60,6 +60,7 @@ modules:
         error_retry_queue_interval_seconds: int = 30, # Interval in seconds between retrying a failed membership change
         error_retry_queue_log_after_retry_count: int = 3, # The count of error retry queue attempts to start logging warnings
         auth_provider: str = "", # The unique, internal ID of the external identity provider.
+        admin_user: str = "", # The localpart of the sole administrator allowed to call the API
 ```
 
 ### Authentication (`jwt_auth`)
@@ -78,6 +79,15 @@ The signing key can be provided in one of two ways:
   explicitly. Internally the key is converted to a JWK.
 - **`jwk_path`**: path to a JSON Web Key holding the private key, with `kid` set (and `alg`
   optionally set/inferred). When using a raw JWK, `iss` and `sub` are required.
+### API access restriction
+
+The Famedly Control API is restricted to a single Matrix user, configured via the
+`admin_user` option. Every API request from any other user (including other server
+admins) is rejected with `403 M_FORBIDDEN`.
+
+This restriction exists because the module stores its management information in the
+`admin_user`'s account data. Allowing multiple admins would risk splitting that
+management state across users. The configured `admin_user` should be a server admin.
 
 ## Testing
 

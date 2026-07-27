@@ -141,8 +141,23 @@ class FamedlyControlConfig(BaseModel):
         ...,
         description="The unique, internal ID of the external identity provider, used in the database to link external user IDs to Matrix user IDs",
     )
+    admin_user: str = Field(
+        ...,
+        description="The localpart of the matrix user ID of the sole administrator permitted to call the Famedly Control API.",
+    )
 
     @field_validator("auth_provider")
     @classmethod
     def validate_auth_provider(cls, v: str, info: ValidationInfo) -> str:
         return _validate_not_blank(v, info)
+
+    @field_validator("admin_user")
+    @classmethod
+    def validate_admin_user(cls, v: str, info: ValidationInfo) -> str:
+        v = _validate_not_blank(v, info)
+        if "@" in v or ":" in v:
+            raise ValueError(
+                "admin_user must only contain the localpart (e.g. 'admin'), not a full "
+                "Matrix user ID"
+            )
+        return v
