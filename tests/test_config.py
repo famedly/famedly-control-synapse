@@ -153,9 +153,12 @@ class TestConfigParsing:
             "auth_provider": "https://idp.example.com/",
             "admin_user": "admin",
         }
-
-        with pytest.raises(ValidationError):
-            FamedlyControl.parse_config(config_dict)
+        config = FamedlyControl.parse_config(config_dict)
+        assert config.famedly_control.jwt_auth.iss is None
+        assert (
+            config.famedly_control.jwt_auth.zitadel_service_account_path
+            == SERVICE_ACCOUNT_PATH
+        )
 
     def test_missing_admin_user(self):
         """Test that missing admin_user raises ValidationError."""
@@ -199,9 +202,5 @@ class TestConfigParsing:
             "auth_provider": "https://idp.example.com/",
             "admin_user": admin_user,
         }
-        config = FamedlyControl.parse_config(config_dict)
-        assert config.famedly_control.jwt_auth.iss is None
-        assert (
-            config.famedly_control.jwt_auth.zitadel_service_account_path
-            == SERVICE_ACCOUNT_PATH
-        )
+        with pytest.raises(ValidationError):
+            FamedlyControl.parse_config(config_dict)
