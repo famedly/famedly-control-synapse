@@ -14,7 +14,6 @@
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
 import json
 import logging
-import time
 from pathlib import Path
 from typing import Any
 
@@ -46,6 +45,7 @@ class JwtTokenProvider:
 
     def __init__(self, api: ModuleApi, cfg: JwtAuthConfig):
         self._http_client = api.http_client
+        self._clock = api._hs.get_clock()
         self._cfg = cfg
         self._token_endpoint = cfg.token_endpoint.encoded_string()
         self._token: str | None = None
@@ -81,7 +81,7 @@ class JwtTokenProvider:
 
     def _build_assertion(self) -> str:
         """Build and sign the JWT assertion presented to the token endpoint."""
-        now = int(time.time())
+        now = int(self._clock.time())
         claims = {
             "iss": self._iss,
             "sub": self._sub,
@@ -107,7 +107,7 @@ class JwtTokenProvider:
         )
         try:
             self._token = response["access_token"]
-            self._expires_at = time.time() + response["expires_in"]
+            self._expires_at = self._clock.time() + response["expires_in"]
         except KeyError as e:
             raise KeyError(
                 f"token endpoint response missing {e} field: {response}"
@@ -117,7 +117,7 @@ class JwtTokenProvider:
         """Return a valid access token, fetching a fresh one if needed."""
         if (
             self._token is None
-            or time.time() >= self._expires_at - _EXPIRY_BUFFER_SECONDS
+            or self._clock.time() >= self._expires_at - _EXPIRY_BUFFER_SECONDS
         ):
             if self._refreshing is None:
                 self._refreshing = ObservableDeferred(
