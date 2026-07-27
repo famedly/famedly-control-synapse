@@ -403,7 +403,7 @@ class TestManagedRoomCreation(ModuleApiTestCase):
         # The room must never have been created in the first place.
         mock_create_room.assert_not_called()
         # The groups are echoed back so the client knows which request failed.
-        assert channel.json_body.get("groups") == ["test_group"]
+        assert channel.json_body.get("de.famedly.groups") == ["test_group"]
 
     def test_partial_room_deleted_when_assign_fails(
         self, mock_get_group_members

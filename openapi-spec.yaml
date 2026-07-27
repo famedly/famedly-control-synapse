@@ -78,19 +78,46 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                required: [room_id, groups]
-                properties:
-                  room_id:
-                    type: string
-                    example: "!sefiuhWgwghwWgh:example.com"
-                  groups:
-                    $ref: "#/components/schemas/GroupList"
-
+                $ref: "#/components/schemas/RoomGroupsResult"
         "400":
-          description: The request is invalid. A meaningful errcode and description error text will be returned.
+          description: >
+            The request is invalid. `errcode` is `M_BAD_JSON` when the body fails
+            validation, or `M_UNSUPPORTED_ROOM_VERSION` for an unknown room version.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Error"
+                  - type: object
+                    properties:
+                      de.famedly.details:
+                        $ref: "#/components/schemas/ValidationDetails"
         "403":
           description: Forbidden. User is not administrator.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: >
+            The managed room could not be created. Either fetching the group members
+            failed, or assigning them failed and the partially created room was rolled
+            back.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Error"
+                  - type: object
+                    properties:
+                      de.famedly.groups:
+                        $ref: "#/components/schemas/GroupList"
+                      room_id:
+                        type: string
+                        description: >
+                          Present only when a created room could not be cleaned up
+                          during rollback and may require manual intervention.
+                        example: "!sefiuhWgwghwWgh:example.com"
 
   /_famedlyControl/v1/managedRooms/rooms:
     get:
@@ -248,14 +275,45 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                required: [room_id, groups]
-                properties:
-                  room_id:
-                    type: string
-                    example: "!sefiuhWgwghwWgh:example.com"
-                  groups:
-                    $ref: "#/components/schemas/GroupList"
+                $ref: "#/components/schemas/RoomGroupsResult"
+        "400":
+          description: The request body is invalid. `errcode` is `M_BAD_JSON`.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Error"
+                  - type: object
+                    properties:
+                      de.famedly.details:
+                        $ref: "#/components/schemas/ValidationDetails"
+        "403":
+          description: Forbidden. User is not administrator.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Room not found or not a managed room.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: >
+            Assigning group members failed. Includes the affected room and groups.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Error"
+                  - type: object
+                    properties:
+                      room_id:
+                        type: string
+                        example: "!sefiuhWgwghwWgh:example.com"
+                      de.famedly.groups:
+                        $ref: "#/components/schemas/GroupList"
 
 components:
   securitySchemes:
@@ -263,6 +321,50 @@ components:
       type: http
       scheme: bearer
   schemas:
+    Error:
+      type: object
+      description: >
+        Standard Matrix-style error response. Any Famedly-specific context is returned
+        under `de.famedly.*` keys alongside `errcode` and `error`.
+      required: [errcode, error]
+      properties:
+        errcode:
+          type: string
+          description: Machine-readable error code, e.g. `M_BAD_JSON`.
+          example: "M_BAD_JSON"
+        error:
+          type: string
+          description: Human-readable error message.
+          example: "Invalid request body"
+    ValidationDetails:
+      type: array
+      description: >
+        Per-field validation failures, returned as `de.famedly.details` when the
+        request body fails validation.
+      items:
+        type: object
+        properties:
+          loc:
+            type: array
+            description: Path to the invalid field.
+            items:
+              type: string
+          msg:
+            type: string
+            description: Description of why the field is invalid.
+      example:
+        - loc: ["groups"]
+          msg: "Input should be a valid list"
+    RoomGroupsResult:
+      type: object
+      description: The room and the groups now assigned to it.
+      required: [room_id, "de.famedly.groups"]
+      properties:
+        room_id:
+          type: string
+          example: "!sefiuhWgwghwWgh:example.com"
+        de.famedly.groups:
+          $ref: "#/components/schemas/GroupList"
     ManagedRoomChunk:
       type: object
       description: A chunk representing a managed room.
