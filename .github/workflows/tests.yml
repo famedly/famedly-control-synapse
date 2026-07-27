@@ -61,6 +61,7 @@ jobs:
       - name: Lint
         uses: chartboost/ruff-action@1ec810db51b3ebdd902c812e962d2f7aafe85fcf
         with:
+          version: 0.15.22
           args: check --target-version ${{ env.PYTHON_TARGET }}
 
       - name: Tests and coverage

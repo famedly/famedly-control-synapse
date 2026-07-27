@@ -154,10 +154,16 @@ class PowerLevelEventContent(BaseModel):
 
 
 class CreateManagedRoomRequest(BaseModel):
-    """Request body for creating a managed room."""
+    """Request body for creating a managed room.
 
-    room_alias_name: str
-    name: str
+    None of the fields are required. Any field that is omitted falls back to a
+    default: ``room_alias_name`` and ``name`` are left unset, ``groups`` defaults
+    to an empty list, and ``room_version`` is filled in with the server's
+    default before validation (see ``CreateManagedRoomResource.on_POST``).
+    """
+
+    room_alias_name: str | None = None
+    name: str | None = None
     topic: str | None = None
     creation_content: CreationContent = Field(default_factory=CreationContent)
     # initial_state has a validator below
@@ -180,7 +186,7 @@ class CreateManagedRoomRequest(BaseModel):
         default_factory=PowerLevelEventContent
     )
     room_version: str
-    groups: list[str]
+    groups: list[str] = Field(default_factory=list)
     is_direct: Literal[False] = Field(
         default=False, description="is_direct cannot be enabled for managed rooms."
     )
