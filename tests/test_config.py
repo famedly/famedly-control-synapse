@@ -165,7 +165,7 @@ class TestConfigParsing:
         config_dict = {
             "famedly_control": {
                 "api_url": "https://api.example.com",
-                "access_token": "test_token",
+                "jwt_auth": _jwt_auth(),
             },
             "auth_provider": "https://idp.example.com/",
         }
@@ -178,7 +178,7 @@ class TestConfigParsing:
         config_dict = {
             "famedly_control": {
                 "api_url": "https://api.example.com",
-                "access_token": "test_token",
+                "jwt_auth": _jwt_auth(),
             },
             "auth_provider": "https://idp.example.com/",
             "admin_user": "",
@@ -197,7 +197,7 @@ class TestConfigParsing:
         config_dict = {
             "famedly_control": {
                 "api_url": "https://api.example.com",
-                "access_token": "test_token",
+                "jwt_auth": _jwt_auth(),
             },
             "auth_provider": "https://idp.example.com/",
             "admin_user": admin_user,

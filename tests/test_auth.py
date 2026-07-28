@@ -150,6 +150,26 @@ class TestJwtTokenProvider(unittest.TestCase):
         self.successResultOf(ensureDeferred(provider.get_access_token()))
         assert api.http_client.post_urlencoded_get_json.call_count == 2
 
+    def test_short_lived_token_not_refreshed_every_call(self):
+        """A token whose lifetime is shorter than the refresh buffer must still be
+        cached: the buffer is clamped to half the lifetime, so back-to-back calls
+        don't trigger a fresh exchange on every request."""
+        api, _, provider = _make_provider(
+            exchange_response={"access_token": "access-abc", "expires_in": 10}
+        )
+        self.successResultOf(ensureDeferred(provider.get_access_token()))
+        self.successResultOf(ensureDeferred(provider.get_access_token()))
+        assert api.http_client.post_urlencoded_get_json.call_count == 1
+
+    def test_invalidate_forces_fresh_exchange(self):
+        """After invalidate(), the next call re-exchanges even though the cached
+        token had not yet reached its expiry buffer."""
+        api, _, provider = _make_provider()
+        self.successResultOf(ensureDeferred(provider.get_access_token()))
+        provider.invalidate()
+        self.successResultOf(ensureDeferred(provider.get_access_token()))
+        assert api.http_client.post_urlencoded_get_json.call_count == 2
+
     def test_concurrent_refresh_shares_single_exchange(self):
         """Callers arriving while a refresh is in flight share it, so the token
         endpoint is hit once and every caller gets the token."""

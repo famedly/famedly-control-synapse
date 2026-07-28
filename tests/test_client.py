@@ -188,6 +188,17 @@ class TestClientResponse(ModuleApiTestCase):
             failure.value.msg == f"Famedly Control API: Error in response: {error_type}"
         )
 
+    def test_non_401_error_does_not_invalidate_token(self) -> None:
+        """A non-auth error (e.g. Forbidden) must leave the cached token intact."""
+        self.client._auth.invalidate = MagicMock()  # type: ignore[method-assign]
+        self.client.http_client.post_json_get_json = AsyncMock(
+            return_value={"Err": {"type": "Forbidden"}}
+        )
+        self.get_failure(
+            self.client.get_group_members("test_group"), FamedlyControlError
+        )
+        self.client._auth.invalidate.assert_not_called()
+
     def test_request_fail_with_err_response_unknown_type(self) -> None:
         """Test that client returns 200 with Err message with unknown type raises FamedlyControlError with 500 code."""
         self.client.http_client.post_json_get_json = AsyncMock(

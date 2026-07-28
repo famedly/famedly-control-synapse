@@ -50,6 +50,10 @@ class JwtTokenProvider:
         self._token_endpoint = cfg.token_endpoint.encoded_string()
         self._token: str | None = None
         self._expires_at: float = 0.0
+        # How long before actual expiry a cached token is considered stale.
+        # Recomputed per token in _fetch and clamped to the issued lifetime, so a
+        # short-lived token isn't treated as immediately expired.
+        self._refresh_buffer: float = 0.0
         # Shared in-flight fetch, so concurrent requests don't stampede the endpoint.
         # ObservableDeferred lets each caller observe the same fetch independently,
         # so a failed refresh is delivered to every waiter rather than only the first.
@@ -106,18 +110,33 @@ class JwtTokenProvider:
             },
         )
         try:
-            self._token = response["access_token"]
-            self._expires_at = self._clock.time() + response["expires_in"]
+            token = response["access_token"]
+            expires_in = response["expires_in"]
         except KeyError as e:
             raise KeyError(
                 f"token endpoint response missing {e} field: {response}"
             ) from e
+        # Clamp the refresh buffer to at most half the issued lifetime, so tokens
+        # with a very short expires_in still get a usable cache window instead of
+        # being refreshed on every request.
+        self._token = token
+        self._refresh_buffer = min(_EXPIRY_BUFFER_SECONDS, expires_in / 2)
+        self._expires_at = self._clock.time() + expires_in
+
+    def invalidate(self) -> None:
+        """Drop the cached token so the next request performs a fresh exchange.
+
+        Called when the resource server rejects the current token (HTTP 401),
+        which can happen before the local expiry buffer elapses.
+        """
+        self._token = None
+        self._expires_at = 0.0
 
     async def get_access_token(self) -> str:
         """Return a valid access token, fetching a fresh one if needed."""
         if (
             self._token is None
-            or self._clock.time() >= self._expires_at - _EXPIRY_BUFFER_SECONDS
+            or self._clock.time() >= self._expires_at - self._refresh_buffer
         ):
             if self._refreshing is None:
                 self._refreshing = ObservableDeferred(

@@ -91,6 +91,10 @@ class FamedlyControlClient:
                 status_code = _ERROR_TYPE_TO_STATUS_CODE.get(
                     error_type, HTTPStatus.INTERNAL_SERVER_ERROR
                 )
+                if status_code == HTTPStatus.UNAUTHORIZED:
+                    # The token was rejected; drop it so the next request exchanges
+                    # a fresh one instead of resending the same rejected credential.
+                    self._auth.invalidate()
                 msg = f"Famedly Control API: Error in response: {error_type}"
                 logger.error(msg)
                 raise FamedlyControlError(status_code, msg)
@@ -101,6 +105,10 @@ class FamedlyControlClient:
         except FamedlyControlError:
             raise
         except HttpResponseException as e:
+            if e.code == HTTPStatus.UNAUTHORIZED:
+                # The token was rejected; drop it so the next request exchanges
+                # a fresh one instead of resending the same rejected credential.
+                self._auth.invalidate()
             msg = f"Famedly Control API: HTTP response error: {e.msg}"
             logger.error(msg)
             raise FamedlyControlError(e.code, msg) from e
