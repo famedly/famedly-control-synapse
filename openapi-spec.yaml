@@ -7,7 +7,7 @@ info:
     Access is restricted to a single Matrix user, configured on the server via the
     module's `admin_user` config option. Every request from any other user (including other
     server admins) is rejected with `403 M_FORBIDDEN`.
-  version: "0.0.4"
+  version: "0.1.0"
 servers:
   - url: https://example.com
 paths:
