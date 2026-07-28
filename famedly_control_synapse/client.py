@@ -8,6 +8,7 @@ from synapse.module_api import ModuleApi
 from synapse.module_api.errors import Codes, SynapseError
 from synapse.types import JsonDict
 
+from famedly_control_synapse.auth import JwtTokenProvider
 from famedly_control_synapse.config import FamedlyControlConfig
 
 logger = logging.getLogger(__name__)
@@ -59,7 +60,7 @@ _ERROR_TYPE_TO_STATUS_CODE: dict[str, HTTPStatus] = {
 
 class FamedlyControlClient:
     def __init__(self, api: ModuleApi, config: FamedlyControlConfig):
-        self.access_token = config.famedly_control.access_token
+        self._auth = JwtTokenProvider(api, config.famedly_control.jwt_auth)
         self.url = config.famedly_control.api_url.encoded_string().rstrip("/")
         self.http_client = api.http_client
         self.sync = 0
@@ -77,10 +78,11 @@ class FamedlyControlClient:
                 failures, validation errors, or any other unexpected exception).
         """
         try:
+            token = await self._auth.get_access_token()
             response = await self.http_client.post_json_get_json(
                 uri,
                 body,
-                headers={"Authorization": [f"Bearer {self.access_token}"]},
+                headers={"Authorization": [f"Bearer {token}"]},
             )
             if "Ok" in response:
                 return model.model_validate(response["Ok"])
@@ -89,6 +91,10 @@ class FamedlyControlClient:
                 status_code = _ERROR_TYPE_TO_STATUS_CODE.get(
                     error_type, HTTPStatus.INTERNAL_SERVER_ERROR
                 )
+                if status_code == HTTPStatus.UNAUTHORIZED:
+                    # The token was rejected; drop it so the next request exchanges
+                    # a fresh one instead of resending the same rejected credential.
+                    self._auth.invalidate()
                 msg = f"Famedly Control API: Error in response: {error_type}"
                 logger.error(msg)
                 raise FamedlyControlError(status_code, msg)
@@ -99,6 +105,10 @@ class FamedlyControlClient:
         except FamedlyControlError:
             raise
         except HttpResponseException as e:
+            if e.code == HTTPStatus.UNAUTHORIZED:
+                # The token was rejected; drop it so the next request exchanges
+                # a fresh one instead of resending the same rejected credential.
+                self._auth.invalidate()
             msg = f"Famedly Control API: HTTP response error: {e.msg}"
             logger.error(msg)
             raise FamedlyControlError(e.code, msg) from e

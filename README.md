@@ -45,7 +45,15 @@ modules:
     config:
         famedly_control:
           api_url: str = "", # Prefix of the current famedly control http API
-          access_token: str = "", # Access token to authenticate against famedly control
+          jwt_auth: # OAuth2 private-key-JWT authentication against the IdP (see "Authentication" below)
+            token_endpoint: str = "" # Token exchange endpoint, e.g. https://CUSTOM_DOMAIN/oauth/v2/token
+            aud: str = "" # Audience of the JWT assertion; the domain of the Zitadel instance
+            iss: str | null = null # Service user id (see below)
+            sub: str | null = null # Service user id (see below)
+            scopes: list[str] = [] # Extra scopes for the token exchange; "openid" is always added
+            token_lifetime: int = 3600 # Lifetime in seconds of the signed JWT assertion
+            jwk_path: str | null = null # Signing key source (see below)
+            zitadel_service_account_path: str | null = null # Signing key source (see below)
         sync_enabled: bool = true, # Whether to run the background group membership sync loop
         sync_polling_interval_seconds: int = 30, # Interval in seconds between polling requests
         error_retry_queue_enabled: bool = true, # Enable retrying membership changes that previously errored
@@ -55,6 +63,22 @@ modules:
         admin_user: str = "", # The localpart of the sole administrator allowed to call the API
 ```
 
+### Authentication (`jwt_auth`)
+
+The module authenticates to Famedly Control using the OAuth2
+[private-key-JWT](https://zitadel.com/docs/guides/integrate/service-accounts/private-key-jwt)
+flow rather than a static token. It signs a short-lived JWT assertion with a private key,
+exchanges it at `token_endpoint` for an access token, and uses that as the `Bearer`
+credential for API requests. The access token is refreshed automatically before it
+expires.
+
+The signing key can be provided in one of two ways:
+
+- **`zitadel_service_account_path`**: path to a Zitadel service account JSON (contains the
+  RSA private key, its `keyId`, and the service `userId`). `iss` and `sub` default to the file's `userId` when not set
+  explicitly. Internally the key is converted to a JWK.
+- **`jwk_path`**: path to a JSON Web Key holding the private key, with `kid` set (and `alg`
+  optionally set/inferred). When using a raw JWK, `iss` and `sub` are required.
 ### API access restriction
 
 The Famedly Control API is restricted to a single Matrix user, configured via the

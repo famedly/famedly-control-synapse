@@ -27,6 +27,7 @@ classifiers = [
 ]
 dependencies = [
     "pydantic>=2.0.0",
+    "pyjwt[crypto]>=2.0.0",
 ]
 version = "0.0.4"
 
@@ -48,6 +49,7 @@ dependencies = [
   "parameterized",
   "psycopg2",
   "pydantic",
+  "pyjwt[crypto]>=2.0.0",
   "types-PyYAML",
   "types-bleach",
   "types-cachetools",
@@ -67,6 +69,7 @@ dependencies = [
   "mypy",
   "mypy-zope",
   "pydantic",
+  "pyjwt[crypto]>=2.0.0",
   "types-PyYAML",
   "types-bleach",
   "types-cachetools",
@@ -149,6 +152,7 @@ extra-dependencies = [
   "parameterized",
   "psycopg2",
   "pytest-cov",
+  "pyjwt[crypto]>=2.0.0",
   # we don't depend on synapse directly to prevent pip from pulling the wrong synapse,
   # when we just want to install the module
   "matrix-synapse @ git+https://github.com/famedly/synapse.git@master"

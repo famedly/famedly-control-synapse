@@ -26,6 +26,7 @@ from twisted.web.http_headers import Headers
 
 from famedly_control_synapse.client import FamedlyControlClient, FamedlyControlError
 from famedly_control_synapse.config import FamedlyControlConfig
+from tests.utils.jwt_keys import JWT_AUTH_CONFIG
 from tests.utils.module_api_testcase import ModuleApiTestCase
 
 
@@ -33,7 +34,7 @@ def _make_client(api_url: str):
     config = FamedlyControlConfig(
         famedly_control={
             "api_url": api_url,
-            "access_token": "test_token",
+            "jwt_auth": JWT_AUTH_CONFIG,
         },
         auth_provider="https://idp.example.com/",
         admin_user="admin",
@@ -41,7 +42,10 @@ def _make_client(api_url: str):
     api = MagicMock()
     api.http_client = MagicMock()
     api.http_client.post_json_get_json = AsyncMock()
-    return api, FamedlyControlClient(api, config)
+    client = FamedlyControlClient(api, config)
+    # The token exchange is out of scope for these tests; return a fixed token.
+    client._auth.get_access_token = AsyncMock(return_value="test_token")  # type: ignore[method-assign]
+    return api, client
 
 
 class TestClientUrlConstruction(unittest.TestCase):
@@ -119,6 +123,10 @@ class TestClientResponse(ModuleApiTestCase):
     def prepare(self, reactor: MemoryReactor, clock: Clock, homeserver: HomeServer):
         super().prepare(reactor, clock, homeserver)
         self.client = self.hs.room_control.client
+        # Bypass the real token exchange; these tests exercise the FC request path.
+        self.client._auth.get_access_token = AsyncMock(
+            return_value="dummy_token_for_testing"
+        )
 
     def test_auth_header_is_single_bearer_token(self) -> None:
         """Regression: Authorization header must arrive as one value, not one per character.
@@ -179,6 +187,17 @@ class TestClientResponse(ModuleApiTestCase):
         assert (
             failure.value.msg == f"Famedly Control API: Error in response: {error_type}"
         )
+
+    def test_non_401_error_does_not_invalidate_token(self) -> None:
+        """A non-auth error (e.g. Forbidden) must leave the cached token intact."""
+        self.client._auth.invalidate = MagicMock()  # type: ignore[method-assign]
+        self.client.http_client.post_json_get_json = AsyncMock(
+            return_value={"Err": {"type": "Forbidden"}}
+        )
+        self.get_failure(
+            self.client.get_group_members("test_group"), FamedlyControlError
+        )
+        self.client._auth.invalidate.assert_not_called()
 
     def test_request_fail_with_err_response_unknown_type(self) -> None:
         """Test that client returns 200 with Err message with unknown type raises FamedlyControlError with 500 code."""
