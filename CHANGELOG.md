@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.0] - 2026-07-28
+
+- bring in changes from upstream test suite (Jason Little)
+- chore: use uv as the dependencies installer (FrenchGithubUser)
+- feat: add endpoint to list the groups associated to a managed room (FrenchGithubUser)
+- feat: add `operationId`s to the openAPI spec (FrenchGithubUser)
+- feat: Allow deleting rooms from the Admin API to work even with managed rooms (Jason Little)
+- feat: never partially create a managed room (FrenchGithubUser)
+- feat: restrict who can call the famedly control API (FrenchGithubUser)
+- fix: match openapi spec with code for `createRoom` request (FrenchGithubUser)
+- test: add in test that makes sure assigning a group that does not exist(or other error received) doesn't actually modify the room (Jason Little)
+- feat: migrate to service account to contact FC (FrenchGithubUser)
+
 ## [0.0.4] - 2026-05-26
 
 - chore: update GitHub Action pins (Niklas Zender)
