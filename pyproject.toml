@@ -144,6 +144,14 @@ check_untyped_defs = true
 profile = "black"
 src_paths = ["famedly_control_synapse", "tests"]
 
+[tool.black]
+target-version = [
+  "py310",
+  "py311",
+  "py312",
+  "py313"
+]
+
 [tool.hatch.envs.hatch-test]
 # The Hatch test environment includes the default pytest, mock and coverage
 # dependencies. If you should need additional, use the 'extra-dependencies' section
