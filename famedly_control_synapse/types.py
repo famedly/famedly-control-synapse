@@ -1,5 +1,5 @@
 import logging
-from typing import Collection
+from collections.abc import Collection
 
 from pydantic import BaseModel, Field
 from pydantic.dataclasses import dataclass
@@ -26,9 +26,7 @@ class RoomQueueEntry(BaseModel):
 
     def __bool__(self) -> bool:
         """Allow of easy check if there are ANY queue entries"""
-        if self.external_ids or self.members:
-            return True
-        return False
+        return bool(self.external_ids or self.members)
 
     def maybe_noop_or_update_external_id(
         self, id_to_compare: str, reason: ActionReason

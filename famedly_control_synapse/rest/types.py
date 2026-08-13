@@ -95,7 +95,7 @@ class PowerLevelEventContent(BaseModel):
         # The context object is of type ContextT(and appears to be a proxy object type),
         # but only if it was passed into the model validation.
         if not isinstance(info.context, dict):
-            raise ValueError(
+            raise TypeError(
                 "Context should be passed into the model validation in the form of a dict"
             )
 
@@ -203,19 +203,19 @@ class CreateManagedRoomRequest(BaseModel):
         cls, v: list[JsonDict], info: ValidationInfo
     ) -> list[JsonDict]:
         for state_dict in v:
-            if state_dict.get("type") == EventTypes.JoinRules:
-                if state_dict.get("content", {}).get("join_rule") != Membership.INVITE:
-                    raise ValueError(
-                        f"{info.field_name} contains join_rule that is not 'invite'"
-                    )
-            if state_dict.get("type") == EventTypes.GuestAccess:
-                if (
-                    state_dict.get("content", {}).get("guest_access")
-                    != GuestAccess.FORBIDDEN
-                ):
-                    raise ValueError(
-                        f"{info.field_name} contains guest_access that is not 'forbidden'"
-                    )
+            if state_dict.get("type") == EventTypes.JoinRules and (
+                state_dict.get("content", {}).get("join_rule") != Membership.INVITE
+            ):
+                raise ValueError(
+                    f"{info.field_name} contains join_rule that is not 'invite'"
+                )
+            if state_dict.get("type") == EventTypes.GuestAccess and (
+                state_dict.get("content", {}).get("guest_access")
+                != GuestAccess.FORBIDDEN
+            ):
+                raise ValueError(
+                    f"{info.field_name} contains guest_access that is not 'forbidden'"
+                )
             if state_dict.get("type") == EventTypes.PowerLevels:
                 PowerLevelEventContent.model_validate(
                     state_dict.get("content"), context=info.context

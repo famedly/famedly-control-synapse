@@ -1099,7 +1099,6 @@ class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
                 raise SynapseError(
                     HTTPStatus.UNAUTHORIZED, "Permission denied", Codes.UNAUTHORIZED
                 )
-            return None
 
         with patch(
             "synapse.module_api.ModuleApi.update_room_membership",
@@ -1172,7 +1171,6 @@ class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
         ):
             if target == non_existent_user:
                 raise SynapseError(404, "User not found", Codes.NOT_FOUND)
-            return None
 
         with patch(
             "synapse.module_api.ModuleApi.update_room_membership",
