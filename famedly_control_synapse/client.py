@@ -178,4 +178,3 @@ class FamedlyControlError(SynapseError):
             errcode=errcode or Codes.UNKNOWN,
             additional_fields=additional_fields,
         )
-        logger.error(msg)
