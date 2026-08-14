@@ -22,9 +22,14 @@ from pydantic import (
 )
 
 
+class ConfigValidationError(ValueError):
+    """Raised when the configuration is invalid or incomplete."""
+
+
 def _validate_not_blank(v: str, info: ValidationInfo) -> str:
     if not v.strip():
-        raise ValueError(f"{info.field_name} cannot be empty or whitespace-only")
+        msg = f"{info.field_name} cannot be empty or whitespace-only"
+        raise ConfigValidationError(msg)
     return v
 
 
@@ -92,13 +97,13 @@ class JwtAuthConfig(BaseModel):
     @model_validator(mode="after")
     def validate_key_source(self) -> "JwtAuthConfig":
         if bool(self.jwk_path) == bool(self.zitadel_service_account_path):
-            raise ValueError(
-                "exactly one of jwk_path or zitadel_service_account_path must be set"
-            )
+            msg = "exactly one of jwk_path or zitadel_service_account_path must be set"
+            raise ConfigValidationError(msg)
         # iss/sub can be derived from the service account file's userId; when using a
         # raw JWK there is no such fallback, so they must be provided explicitly.
         if self.jwk_path and (not self.iss or not self.sub):
-            raise ValueError("iss and sub are required when using jwk_path")
+            msg = "iss and sub are required when using jwk_path"
+            raise ConfigValidationError(msg)
         return self
 
 
@@ -156,8 +161,6 @@ class FamedlyControlConfig(BaseModel):
     def validate_admin_user(cls, v: str, info: ValidationInfo) -> str:
         v = _validate_not_blank(v, info)
         if "@" in v or ":" in v:
-            raise ValueError(
-                "admin_user must only contain the localpart (e.g. 'admin'), not a full "
-                "Matrix user ID"
-            )
+            msg = "admin_user must only contain the localpart (e.g. 'admin'), not a full Matrix user ID"
+            raise ConfigValidationError(msg)
         return v

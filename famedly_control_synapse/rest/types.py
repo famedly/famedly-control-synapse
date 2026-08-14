@@ -13,6 +13,10 @@ from synapse.types import JsonDict
 from typing_extensions import Self
 
 
+class InvalidRequestError(ValueError):
+    """Raised when the parameters for a request are invalid."""
+
+
 class CreationContent(BaseModel):
     """Pydantic model for CreationContent."""
 
@@ -80,9 +84,8 @@ class PowerLevelEventContent(BaseModel):
                 immutable_power_level = PROTECTED_EVENT_TYPES.get(event_type)
                 if power_level != immutable_power_level:
                     # This will return a 400 on the room creation endpoint
-                    raise ValueError(
-                        f"Changing power_level of '{event_type}' in {info.field_name} is forbidden!"
-                    )
+                    msg = f"Changing power_level of '{event_type}' in {info.field_name} is forbidden!"
+                    raise InvalidRequestError(msg)
         return v
 
     @field_validator("users")
@@ -95,23 +98,21 @@ class PowerLevelEventContent(BaseModel):
         # The context object is of type ContextT(and appears to be a proxy object type),
         # but only if it was passed into the model validation.
         if not isinstance(info.context, dict):
-            raise TypeError(
-                "Context should be passed into the model validation in the form of a dict"
-            )
+            msg = "Context should be passed into the model validation in the form of a dict"
+            raise InvalidRequestError(msg)
 
         room_creator: str | None = info.context.get("room_creator")
         if not room_creator:
-            raise ValueError(
-                "Room creator key was found in context, but not a usable value"
-            )
+            msg = "Room creator key was found in context, but not a usable value"
+            raise InvalidRequestError(msg)
 
         for user, power_level in v.items():
             if user != room_creator and power_level == CREATOR_POWER_LEVEL - 1:
-                raise ValueError(
-                    "Can not have a user with that high a power level, only the room creator"
-                )
+                msg = "Can not have a user with that high a power level, only the room creator"
+                raise InvalidRequestError(msg)
             if user == room_creator and power_level != CREATOR_POWER_LEVEL - 1:
-                raise ValueError("Can not change the room creator's power level")
+                msg = "Can not change the room creator's power level"
+                raise InvalidRequestError(msg)
         return v
 
     @model_validator(mode="before")
@@ -147,9 +148,8 @@ class PowerLevelEventContent(BaseModel):
         for action in ("ban", "invite", "kick"):
             action_value = getattr(self, action)
             if action_value != CREATOR_POWER_LEVEL - 1:
-                raise ValueError(
-                    f"Membership action('{action}') power level can not be overridden"
-                )
+                msg = f"Membership action('{action}') power level can not be overridden"
+                raise InvalidRequestError(msg)
         return self
 
 

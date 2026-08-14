@@ -35,6 +35,10 @@ _JWT_BEARER_GRANT = "urn:ietf:params:oauth:grant-type:jwt-bearer"
 _EXPIRY_BUFFER_SECONDS = 30
 
 
+class InvalidTokenError(KeyError):
+    """Raised when the token response is missing a required field."""
+
+
 class JwtTokenProvider:
     """Obtains and caches an OAuth2 access token via the private-key-JWT flow.
 
@@ -113,7 +117,7 @@ class JwtTokenProvider:
             token = response["access_token"]
             expires_in = response["expires_in"]
         except KeyError as e:
-            raise KeyError(
+            raise InvalidTokenError(
                 f"token endpoint response missing {e} field: {response}"
             ) from e
         # Clamp the refresh buffer to at most half the issued lifetime, so tokens

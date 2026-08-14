@@ -49,13 +49,12 @@ class TestManagedRoomCreation(ModuleApiTestCase):
         return config.model_dump()
 
     def invalid_room_config(self):
-        config = {
+        return {
             "room_alias_name": "test_room_alias",
             "name": "Test Room",
             "topic": "This is a test room",
             "3pid_invites": ["something"],  # Invalid field
         }
-        return config
 
     def _get_creator_powerlevel(self) -> int:
         """
