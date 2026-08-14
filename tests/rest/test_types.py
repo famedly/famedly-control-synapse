@@ -342,7 +342,7 @@ class TestCreateManagedRoomRequest(TestCase):
         # Note that the context is not added here. That data is needed to validate that
         # any users in the `user` override are not the room creator and should not be
         # skipped during power level validation
-        with pytest.raises(ValidationError):
+        with pytest.raises(TypeError):
             CreateManagedRoomRequest.model_validate(room_config)
 
         # Also test that the wrong kind of object is not expected. It must be a dict

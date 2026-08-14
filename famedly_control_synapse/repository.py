@@ -73,7 +73,7 @@ class ManagedRoomRepository:
                 .replace("_", "!_")
             )
             pattern = f"%{escaped}%"
-            alias_body = escaped[1:] if escaped.startswith("#") else escaped
+            alias_body = escaped.removeprefix("#")
             alias_pattern = f"#%{alias_body}%"
             search_filter_sql = """
                 WHERE (

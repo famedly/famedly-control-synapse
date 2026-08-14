@@ -95,7 +95,7 @@ class GroupMembershipSyncer:
             # from the sleep() below. Perhaps in the future that should be caught, it
             # should only occur during server shutdown though and can safely ignored
             # (although it may look rather scary in the logs)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 Do not catch blind exception
                 logger.error("Exception during loop: %r", e)
                 await self.api._hs.get_clock().sleep(
                     Duration(seconds=self.polling_interval_seconds)
