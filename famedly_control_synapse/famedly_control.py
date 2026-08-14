@@ -177,14 +177,14 @@ class FamedlyControl:
         if membership == Membership.JOIN:
             return True, None
 
-        if membership == Membership.LEAVE:
+        if (
+            membership == Membership.LEAVE
+            and event.sender == event.state_key
+            and await self.api._store.get_user_deactivated_status(event.sender)
+        ):
             # Leave events where the sender is the target should only be allowed when
             # deactivating the user
-            if (
-                event.sender == event.state_key
-                and await self.api._store.get_user_deactivated_status(event.sender)
-            ):
-                return True, None
+            return True, None
 
         raise SynapseError(
             403,

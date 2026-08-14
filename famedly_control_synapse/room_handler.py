@@ -1,8 +1,8 @@
 import logging
+from collections.abc import Collection, Iterable
 from dataclasses import dataclass, field
 from http import HTTPStatus
 from itertools import chain
-from typing import Collection, Iterable
 
 from prometheus_client import Counter, Gauge
 from synapse.api.constants import EventContentFields, EventTypes, Membership
@@ -237,7 +237,7 @@ class ManagedRoomHandler:
                 self.increment_error_count(
                     error_code=self.get_error_code_from_exception(e)
                 )
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 Do not catch blind exception
                 # Catch any other unexpected exceptions
                 error_msg = str(e)
                 errors[member] = error_msg
@@ -316,7 +316,7 @@ class ManagedRoomHandler:
                     new_membership=Membership.LEAVE,
                     content={"reason": "User has been removed from the room"},
                 )
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 Do not catch blind exception
                 logger.error(
                     "Failed to remove user %s from room %s: %s", member, room_id, e
                 )
@@ -700,7 +700,7 @@ class ManagedRoomHandler:
         skipped = False
         try:
             skipped = await self._process_retry_queue(admin_user_id)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 Do not catch blind exception
             # Log that there was an error so it does not raise and break the looping
             # call
             logger.warning(

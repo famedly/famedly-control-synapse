@@ -34,8 +34,8 @@ if TYPE_CHECKING:
 # When running under postgres, we first create a base database with the name
 # POSTGRES_BASE_DB and update it to the current schema. Then, for each test case, we
 # create another unique database, using the base database as a template.
-USE_POSTGRES_FOR_TESTS = os.environ.get("SYNAPSE_POSTGRES", False)
-LEAVE_DB = os.environ.get("SYNAPSE_LEAVE_DB", False)
+USE_POSTGRES_FOR_TESTS = os.environ.get("SYNAPSE_POSTGRES", None)
+LEAVE_DB = os.environ.get("SYNAPSE_LEAVE_DB", None)
 POSTGRES_USER = os.environ.get("SYNAPSE_POSTGRES_USER", None)
 POSTGRES_HOST = os.environ.get("SYNAPSE_POSTGRES_HOST", None)
 POSTGRES_PASSWORD = os.environ.get("SYNAPSE_POSTGRES_PASSWORD", None)

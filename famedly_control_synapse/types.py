@@ -1,5 +1,5 @@
 import logging
-from typing import Collection
+from collections.abc import Collection
 
 from pydantic import BaseModel, Field
 from pydantic.dataclasses import dataclass
@@ -26,9 +26,7 @@ class RoomQueueEntry(BaseModel):
 
     def __bool__(self) -> bool:
         """Allow of easy check if there are ANY queue entries"""
-        if self.external_ids or self.members:
-            return True
-        return False
+        return bool(self.external_ids or self.members)
 
     def maybe_noop_or_update_external_id(
         self, id_to_compare: str, reason: ActionReason
@@ -49,12 +47,11 @@ class RoomQueueEntry(BaseModel):
             if self.external_ids[id_to_compare].is_removal != reason.is_removal:
                 self.external_ids.pop(id_to_compare)
                 return True
-            else:
-                self.external_ids[id_to_compare].latest_attempt_utc_ms = (
-                    reason.latest_attempt_utc_ms
-                )
-                self.external_ids[id_to_compare].retry_count += 1
-                return True
+            self.external_ids[id_to_compare].latest_attempt_utc_ms = (
+                reason.latest_attempt_utc_ms
+            )
+            self.external_ids[id_to_compare].retry_count += 1
+            return True
         return False
 
 

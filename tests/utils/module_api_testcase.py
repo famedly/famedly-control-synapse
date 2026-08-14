@@ -37,8 +37,6 @@ from famedly_control_synapse.rest.types import CreateManagedRoomRequest
 from tests.utils.jwt_keys import JWT_AUTH_CONFIG
 
 logger = logging.getLogger(__name__)
-# ruff: noqa: E501
-# We don't care about long lines in our testdata
 
 if TYPE_CHECKING:
     from synapse.storage.databases.main import DataStore

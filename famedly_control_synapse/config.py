@@ -157,7 +157,6 @@ class FamedlyControlConfig(BaseModel):
         v = _validate_not_blank(v, info)
         if "@" in v or ":" in v:
             raise ValueError(
-                "admin_user must only contain the localpart (e.g. 'admin'), not a full "
-                "Matrix user ID"
+                "admin_user must only contain the localpart (e.g. 'admin'), not a full Matrix user ID"
             )
         return v

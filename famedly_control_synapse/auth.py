@@ -57,7 +57,7 @@ class JwtTokenProvider:
         # Shared in-flight fetch, so concurrent requests don't stampede the endpoint.
         # ObservableDeferred lets each caller observe the same fetch independently,
         # so a failed refresh is delivered to every waiter rather than only the first.
-        self._refreshing: "ObservableDeferred[None] | None" = None
+        self._refreshing: ObservableDeferred[None] | None = None
 
         # Load the signing key and its metadata once, from whichever source is set.
         self._key: Any
@@ -113,7 +113,7 @@ class JwtTokenProvider:
             token = response["access_token"]
             expires_in = response["expires_in"]
         except KeyError as e:
-            raise KeyError(
+            raise ValueError(
                 f"token endpoint response missing {e} field: {response}"
             ) from e
         # Clamp the refresh buffer to at most half the issued lifetime, so tokens

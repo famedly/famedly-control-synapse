@@ -1,6 +1,7 @@
 import logging
 import re
-from typing import Iterable, Pattern
+from collections.abc import Iterable
+from re import Pattern
 
 from pydantic import ValidationError
 from synapse.api.constants import CREATOR_POWER_LEVEL
