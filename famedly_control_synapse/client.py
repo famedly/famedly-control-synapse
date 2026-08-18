@@ -86,7 +86,7 @@ class FamedlyControlClient:
             )
             if "Ok" in response:
                 return model.model_validate(response["Ok"])
-            elif "Err" in response:
+            if "Err" in response:
                 error_type = response["Err"].get("type")
                 status_code = _ERROR_TYPE_TO_STATUS_CODE.get(
                     error_type, HTTPStatus.INTERNAL_SERVER_ERROR
@@ -98,10 +98,9 @@ class FamedlyControlClient:
                 msg = f"Famedly Control API: Error in response: {error_type}"
                 logger.error(msg)
                 raise FamedlyControlError(status_code, msg)
-            else:
-                msg = f"Famedly Control API: Unexpected response format: {response}"
-                logger.error(msg)
-                raise FamedlyControlError(HTTPStatus.BAD_GATEWAY, msg)
+            msg = f"Famedly Control API: Unexpected response format: {response}"
+            logger.error(msg)
+            raise FamedlyControlError(HTTPStatus.BAD_GATEWAY, msg)
         except FamedlyControlError:
             raise
         except HttpResponseException as e:

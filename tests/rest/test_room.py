@@ -49,13 +49,12 @@ class TestManagedRoomCreation(ModuleApiTestCase):
         return config.model_dump()
 
     def invalid_room_config(self):
-        config = {
+        return {
             "room_alias_name": "test_room_alias",
             "name": "Test Room",
             "topic": "This is a test room",
             "3pid_invites": ["something"],  # Invalid field
         }
-        return config
 
     def _get_creator_powerlevel(self) -> int:
         """
@@ -1099,7 +1098,6 @@ class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
                 raise SynapseError(
                     HTTPStatus.UNAUTHORIZED, "Permission denied", Codes.UNAUTHORIZED
                 )
-            return None
 
         with patch(
             "synapse.module_api.ModuleApi.update_room_membership",
@@ -1172,7 +1170,6 @@ class TestAssignGroupsToManagedRoom(ModuleApiTestCase):
         ):
             if target == non_existent_user:
                 raise SynapseError(404, "User not found", Codes.NOT_FOUND)
-            return None
 
         with patch(
             "synapse.module_api.ModuleApi.update_room_membership",
