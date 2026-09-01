@@ -211,7 +211,7 @@ class TestClientResponse(ModuleApiTestCase):
         assert failure.value.code == 500
         assert (
             failure.value.msg
-            == "Famedly Control API: Error in response: SomeUnknownType"
+            == "Famedly Control API: Unknown error type: SomeUnknownType"
         )
 
     def test_request_fail_with_err_response_not_dict(self) -> None:
@@ -224,8 +224,7 @@ class TestClientResponse(ModuleApiTestCase):
         )
         assert failure.value.code == 500
         assert (
-            failure.value.msg
-            == "Famedly Control API: Unexpected error: 'str' object has no attribute 'get'"
+            failure.value.msg == "Famedly Control API: Unexpected error response format"
         )
 
     def test_request_fail_with_unexpected_response(self) -> None:
@@ -266,9 +265,9 @@ class TestClientResponse(ModuleApiTestCase):
         failure = self.get_failure(
             self.client.get_group_members("test_group"), FamedlyControlError
         )
-        assert failure.value.code == 500
+        assert failure.value.code == 502
         assert failure.value.msg.startswith(
-            "Famedly Control API: Unexpected error: 1 validation error for GroupMembersResponse"
+            "Famedly Control API: Unexpected response format"
         )
 
     def test_request_fail_with_generic_exception(self) -> None:

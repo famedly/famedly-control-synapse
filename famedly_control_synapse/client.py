@@ -1,8 +1,9 @@
 import logging
+from enum import Enum
 from http import HTTPStatus
-from typing import Final, Literal, TypeVar
+from typing import Final, Literal, NoReturn, TypeVar
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from synapse.api.errors import HttpResponseException
 from synapse.module_api import ModuleApi
 from synapse.module_api.errors import Codes, SynapseError
@@ -58,12 +59,34 @@ _ERROR_TYPE_TO_STATUS_CODE: dict[str, HTTPStatus] = {
 }
 
 
+class FamedlyControlErrorResponse(BaseModel):
+    """An error response from Famedly Control API. Everything inside the `Err` object."""
+
+    type: str
+
+    # TODO: after minimum python version becomes 3.11, change return type here to `Never` per python docs.
+    def raise_famedly_control_error(self) -> NoReturn:
+        """
+        This is an error class. Raise the error with appropriate messages and codes depending on what type of error it
+        is.
+        """
+        if self.type not in _ERROR_TYPE_TO_STATUS_CODE:
+            status_code = HTTPStatus.INTERNAL_SERVER_ERROR
+            msg = f"Famedly Control API: Unknown error type: {self.type}"
+            raise FamedlyControlError(status_code, msg)
+
+        status_code = _ERROR_TYPE_TO_STATUS_CODE[self.type]
+
+        msg = f"Famedly Control API: Error in response: {self.type}"
+
+        raise FamedlyControlError(status_code, msg)
+
+
 class FamedlyControlClient:
     def __init__(self, api: ModuleApi, config: FamedlyControlConfig):
         self._auth = JwtTokenProvider(api, config.famedly_control.jwt_auth)
         self.url = config.famedly_control.api_url.encoded_string().rstrip("/")
         self.http_client = api.http_client
-        self.sync = 0
 
     async def _request(self, uri: str, body: dict, model: type[_T]) -> _T:
         """POST to the Famedly Control API and return a validated response model.
@@ -84,25 +107,6 @@ class FamedlyControlClient:
                 body,
                 headers={"Authorization": [f"Bearer {token}"]},
             )
-            if "Ok" in response:
-                return model.model_validate(response["Ok"])
-            if "Err" in response:
-                error_type = response["Err"].get("type")
-                status_code = _ERROR_TYPE_TO_STATUS_CODE.get(
-                    error_type, HTTPStatus.INTERNAL_SERVER_ERROR
-                )
-                if status_code == HTTPStatus.UNAUTHORIZED:
-                    # The token was rejected; drop it so the next request exchanges
-                    # a fresh one instead of resending the same rejected credential.
-                    self._auth.invalidate()
-                msg = f"Famedly Control API: Error in response: {error_type}"
-                logger.error(msg)
-                raise FamedlyControlError(status_code, msg)
-            msg = f"Famedly Control API: Unexpected response format: {response}"
-            logger.error(msg)
-            raise FamedlyControlError(HTTPStatus.BAD_GATEWAY, msg)
-        except FamedlyControlError:
-            raise
         except HttpResponseException as e:
             if e.code == HTTPStatus.UNAUTHORIZED:
                 # The token was rejected; drop it so the next request exchanges
@@ -112,9 +116,40 @@ class FamedlyControlClient:
             logger.error(msg)
             raise FamedlyControlError(e.code, msg) from e
         except Exception as e:
+            # Realistically, the known options here are RequestTimedOutError and ValueError. The second happens when it
+            # is not parsable JSON. The first is a timeout on receiving the headers, not the body of the response.
+            # XXX(jason): Is the timeout worth responding with a 504(Gateway Timeout) code?
+            # This gets `None` as it will default to "M_UNKNOWN"
+            errcode = Codes.NOT_JSON if isinstance(e, ValueError) else None
             msg = f"Famedly Control API: Unexpected error: {e}"
             logger.error(msg)
-            raise FamedlyControlError(msg=msg) from e
+            raise FamedlyControlError(msg=msg, errcode=errcode) from e
+
+        if "Err" in response:
+            try:
+                err_object = response["Err"]
+                err_response_model = FamedlyControlErrorResponse.model_validate(
+                    err_object
+                )
+            except ValidationError as e:
+                logger.warning(f"Famedly Control API: Validation error: {e}")
+                raise FamedlyControlError(
+                    HTTPStatus.INTERNAL_SERVER_ERROR,
+                    "Famedly Control API: Unexpected error response format",
+                )
+            else:
+                err_response_model.raise_famedly_control_error()
+
+        try:
+            if "Ok" not in response:
+                # XXX: Is this the correct Exception to raise here?
+                raise ValueError()
+            return model.model_validate(response["Ok"])
+        except ValueError as e:
+            # ValueError is also a superclass of Pydantic's ValidationError, so both should be caught here
+            msg = f"Famedly Control API: Unexpected response format: {response}"
+            logger.error(msg + f"\n{e}")
+            raise FamedlyControlError(HTTPStatus.BAD_GATEWAY, msg)
 
     async def get_group_members(self, group_id: str) -> list[str]:
         """Get the current members of a group.
