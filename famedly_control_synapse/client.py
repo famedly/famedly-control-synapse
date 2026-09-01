@@ -159,6 +159,12 @@ class FamedlyControlClient:
                     "Famedly Control API: Unexpected error response format",
                 )
             else:
+                if err_response_model.type == "Unauthorized":
+                    # The token was rejected; drop it so the next request exchanges a fresh one instead of resending the
+                    # same rejected credential.
+                    # XXX: This is not tested for!! I had forgotten to include it and tests passed
+                    self._auth.invalidate()
+
                 err_response_model.raise_famedly_control_error()
 
         try:
