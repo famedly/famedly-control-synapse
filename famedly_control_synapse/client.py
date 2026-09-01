@@ -50,9 +50,14 @@ class GroupMembersResponse(BaseModel):
     members: list[MemberInfo]
 
 
+class FamedlyControlApiErrorCodes(str, Enum):
+    UNKNOWN_SYNC_TOKEN = "UnknownSyncToken"
+
+
 _ERROR_TYPE_TO_STATUS_CODE: dict[str, HTTPStatus] = {
     # This is based on GroupMembershipDiffApi.yaml
     "Internal": HTTPStatus.INTERNAL_SERVER_ERROR,
+    "InvalidRequest": HTTPStatus.BAD_REQUEST,
     "Forbidden": HTTPStatus.FORBIDDEN,
     "Unauthorized": HTTPStatus.UNAUTHORIZED,
     "Api": HTTPStatus.BAD_GATEWAY,
@@ -63,6 +68,10 @@ class FamedlyControlErrorResponse(BaseModel):
     """An error response from Famedly Control API. Everything inside the `Err` object."""
 
     type: str
+    error: str | None = None
+    "Used by the 'Api' error type"
+    errors: dict[str, str] | None = None
+    "Used by the 'InvalidRequest' error type. When present, should be an mapping of 'path' to a str and 'error' to a str."
 
     # TODO: after minimum python version becomes 3.11, change return type here to `Never` per python docs.
     def raise_famedly_control_error(self) -> NoReturn:
@@ -77,7 +86,19 @@ class FamedlyControlErrorResponse(BaseModel):
 
         status_code = _ERROR_TYPE_TO_STATUS_CODE[self.type]
 
-        msg = f"Famedly Control API: Error in response: {self.type}"
+        # Special case error types.
+        if self.type == "Api":
+            # "Api" can have explicit sub-errors.
+            if self.error == FamedlyControlApiErrorCodes.UNKNOWN_SYNC_TOKEN:
+                raise FamedlyUnknownSyncTokenError()
+            msg = f"Famedly Control API: {self.type}, {self.error=}"
+
+        elif self.type == "InvalidRequest":
+            # "InvalidRequest" can have a few extra details that can be surfaced.
+            msg = f"Famedly Control API: {self.type}, {self.errors=}"
+
+        else:
+            msg = f"Famedly Control API: Error in response: {self.type}"
 
         raise FamedlyControlError(status_code, msg)
 
@@ -213,3 +234,7 @@ class FamedlyControlError(SynapseError):
             errcode=errcode or Codes.UNKNOWN,
             additional_fields=additional_fields,
         )
+
+
+class FamedlyUnknownSyncTokenError(Exception):
+    pass
