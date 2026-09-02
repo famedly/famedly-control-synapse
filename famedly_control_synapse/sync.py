@@ -13,13 +13,17 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
 import logging
+from collections import defaultdict
 
 from synapse.module_api import ModuleApi
 from synapse.util.duration import Duration
+from synapse.util.metrics import measure_func
 
 from famedly_control_synapse.client import (
     DiffRecord,
     FamedlyControlClient,
+    FamedlyUnknownSyncTokenError,
+    ManyGroupsDiffResponse,
     MembershipAction,
 )
 from famedly_control_synapse.config import FamedlyControlConfig
@@ -45,6 +49,8 @@ class GroupMembershipSyncer:
         self.client = client
         self.room_handler = room_handler
         self.repository = repository
+        # Clock( and server_name) are used by the `@measure_func` decorator to add metrics for appropriate functions.
+        self.clock = api._clock
         self.server_name = api.server_name
         self.polling_interval_seconds = config.sync_polling_interval_seconds
         self.is_enabled = config.sync_enabled
@@ -108,9 +114,17 @@ class GroupMembershipSyncer:
         Long poll for the response. If a 'next_sync' token is returned, use that on the
         next request.
         """
-        response = await self.client.get_all_groups_diffs(
-            sync=self._sync_token, timeout=self.polling_interval_seconds
-        )
+        try:
+            response = await self.client.get_all_groups_diffs(
+                sync=self._sync_token, timeout=self.polling_interval_seconds
+            )
+        except FamedlyUnknownSyncTokenError:
+            # The token was rejected, re-request with no sync token to get the full diff.
+            full_response = await self.client.get_all_groups_diffs(sync=None)
+            # Process the full diff to find the actual delta of what should have changed then persist it. This will
+            # return a new ManyGroupsDiffResponse with the corrected token and empty data. Everything should pass
+            # through and then correctly save the new token at the end.
+            response = await self._reset_and_process_complete_diff(full_response)
 
         if response.next_sync == self._sync_token:
             return
@@ -214,3 +228,90 @@ class GroupMembershipSyncer:
             external_ids_to_add=external_ids_to_add,
             external_ids_to_remove=external_ids_to_remove,
         )
+
+    @measure_func()
+    async def _reset_and_process_complete_diff(
+        self, diff_response: ManyGroupsDiffResponse
+    ) -> ManyGroupsDiffResponse:
+        """
+        Accept a ManyGroupsDiffResponse that provides the new sync token and the full mapping of group diffs.
+        """
+        # Build a full mapping of all groups from the response. Inside should be a set of all external user ids that
+        # should ultimately be in a given room.
+        # Since there is no known way to know if the list of diff actions is de-duplicated, the list will be processed
+        # in order. Later entries may overwrite earlier entries.
+        groups_to_join_memberships: dict[str, set[str]] = {}
+        for group_id, list_of_diffs in diff_response.data.items():
+            working_group = groups_to_join_memberships.setdefault(group_id, set())
+            for diff in list_of_diffs:
+                if diff.action == MembershipAction.REM:
+                    working_group.discard(diff.external_user_id)
+                if diff.action == MembershipAction.ADD:
+                    working_group.add(diff.external_user_id)
+
+        # Retrieve in one query all the external user id's in the above mapping. This will be needed later to translate
+        # who is who.
+        all_external_user_ids_as_a_set: set[str] = set().union(
+            *groups_to_join_memberships.values()
+        )
+        external_user_ids_to_mxid_map = (
+            await self.room_handler.batch_convert_external_user_ids_to_matrix_user_ids(
+                list(all_external_user_ids_as_a_set)
+            )
+        )
+
+        # Last stage for processing members into their groups. This is the collection that will be used for the final
+        # process.
+        groups_to_set_mxid: dict[str, set[str]] = defaultdict(set)
+        for group_id, e_id_members in groups_to_join_memberships.items():
+            mxid_members: set[str] = set()
+            for e_id in e_id_members:
+                mxid_members.add(external_user_ids_to_mxid_map[e_id])
+            groups_to_set_mxid[group_id] = mxid_members
+
+        # Next, retrieve all known managed rooms. These all have groups assigned to them. The mapping will need to be
+        # transformed into something more usable.
+        # Mapping of "group_id" -> tuple["room_id", "room_creator"]
+        group_to_room_tuple_map = await self.repository.get_rooms_by_group()
+
+        # Transform the above into mapping of:
+        # tuple["room_id", "room_creator"] -> "group_id"
+        room_tuples_to_groups: dict[tuple[str, str], set[str]] = defaultdict(set)
+        for group_id, room_tuple_list in group_to_room_tuple_map.items():
+            for room_tuple in room_tuple_list:
+                room_tuples_to_groups[room_tuple].add(group_id)
+
+        # Do we want to 'del group_to_room_tuple_map' at this point to get a leg up on cleaning?
+
+        # Now that we have all the managed rooms, all the groups that should be in those rooms and the complete
+        # list of what members should be in each group, it's time to pull all the membership data. One room at a time :(
+        for (room_id, room_creator), groups in room_tuples_to_groups.items():
+            # There is no need to itemize by group, just lump all the users together as one big set
+            users_in_groups_set: set[str] = set.union(
+                *[groups_to_set_mxid.get(group, set()) for group in groups]
+            )
+
+            # Same for the users already in the room. One big set
+            users_in_room_list: list[str] = (
+                await self.api._store.get_local_users_in_room(room_id)
+            )
+            users_in_room_set = set(users_in_room_list)
+            # Remember to filter out the room creator, or they will mysteriously and irritatingly disappear
+            users_in_room_set.discard(room_creator)
+
+            # Then it's pretty simple. If they are present in the group but are not already in the room, add them
+            who_to_add = users_in_groups_set.difference(users_in_room_set)
+            # If they are in the room but not present in the group, remove them
+            who_to_remove = users_in_room_set.difference(users_in_groups_set)
+
+            # Any users that used to exist but do not any longer will be dropped on the floor
+            await self.room_handler.force_join_users_to_room(
+                room_id, list(who_to_add), room_creator
+            )
+            await self.room_handler.remove_users_from_room(
+                room_creator, list(who_to_remove), room_id
+            )
+
+        # Now we just can pass back an empty response object so the syncer can process the overridden token. Since
+        # `data` is empty the normal join/leave process is skipped
+        return ManyGroupsDiffResponse(next_sync=diff_response.next_sync, data={})
