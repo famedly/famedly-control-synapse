@@ -552,6 +552,7 @@ class ManagedRoomHandler:
         admin_user: str,
         list_of_groups: list[str],
         expected_member_external_ids: set[str] | None = None,
+        external_to_mxid_mapping: dict[str, str] | None = None,
     ) -> None:
         """
         Provided a list of group IDs, parse and determine the external users that are
@@ -564,7 +565,11 @@ class ManagedRoomHandler:
 
         When the caller has already fetched the group members (e.g. before creating the
         room to avoid a partial room), they can be passed in via
-        ``expected_member_external_ids`` to avoid fetching them again.
+        ``expected_member_external_ids`` to avoid fetching them again. And the same with
+        ``external_to_mxid_mapping`` where the database has already been checked. NOTE:
+        ``external_to_mxid_mapping`` may have more member entries than are appropriate
+        for a given room; do not rely on that being the source of truth but rather use
+        ``expected_member_external_ids``.
         """
         # Get the new groups member state (desired state after update)
         if expected_member_external_ids is None:
@@ -578,6 +583,10 @@ class ManagedRoomHandler:
                     e.msg,
                     additional_fields={"room_id": room_id, "groups": list_of_groups},
                 )
+
+        # One way or the other, this should not be None anymore. At worst, it will be a empty set() if the group had no
+        # members.
+        assert expected_member_external_ids is not None
 
         # Verify that a room exists before making any changes
         try:
@@ -596,13 +605,14 @@ class ManagedRoomHandler:
                 Codes.UNKNOWN,
             )
 
-        member_mxids_mapping = (
-            await self.batch_convert_external_user_ids_to_matrix_user_ids(
-                list(expected_member_external_ids)
+        if external_to_mxid_mapping is None:
+            external_to_mxid_mapping = (
+                await self.batch_convert_external_user_ids_to_matrix_user_ids(
+                    list(expected_member_external_ids)
+                )
             )
-        )
         not_found_external_ids = parse_missing_items(
-            member_mxids_mapping.keys(), expected_member_external_ids
+            external_to_mxid_mapping.keys(), expected_member_external_ids
         )
 
         # Update room account data with new groups information
@@ -633,7 +643,11 @@ class ManagedRoomHandler:
                     ),
                 )
 
-        expected_members = set(member_mxids_mapping.values())
+        expected_members = {
+            external_to_mxid_mapping[e_id]
+            for e_id in expected_member_external_ids
+            if e_id in external_to_mxid_mapping
+        }
 
         # Get the current members of the room
         current_member_mxids = await self.api._store.get_users_in_room(room_id)
