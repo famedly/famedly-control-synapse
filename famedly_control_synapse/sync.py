@@ -240,9 +240,11 @@ class GroupMembershipSyncer:
         # should ultimately be in a given room.
         # Since there is no known way to know if the list of diff actions is de-duplicated, the list will be processed
         # in order. Later entries may overwrite earlier entries.
-        groups_to_join_memberships: dict[str, set[str]] = {}
+        groups_to_external_ids_that_should_be_joined: dict[str, set[str]] = {}
         for group_id, list_of_diffs in diff_response.data.items():
-            working_group = groups_to_join_memberships.setdefault(group_id, set())
+            working_group = groups_to_external_ids_that_should_be_joined.setdefault(
+                group_id, set()
+            )
             for diff in list_of_diffs:
                 if diff.action == MembershipAction.REM:
                     working_group.discard(diff.external_user_id)
@@ -252,7 +254,7 @@ class GroupMembershipSyncer:
         # Retrieve in one query all the external user id's in the above mapping. This will be needed later to translate
         # who is who.
         all_external_user_ids_as_a_set: set[str] = set().union(
-            *groups_to_join_memberships.values()
+            *groups_to_external_ids_that_should_be_joined.values()
         )
         external_user_ids_to_mxid_map = (
             await self.room_handler.batch_convert_external_user_ids_to_matrix_user_ids(
@@ -260,56 +262,37 @@ class GroupMembershipSyncer:
             )
         )
 
-        # Last stage for processing members into their groups. This is the collection that will be used for the final
-        # process.
-        groups_to_set_mxid: dict[str, set[str]] = defaultdict(set)
-        for group_id, e_id_members in groups_to_join_memberships.items():
-            mxid_members: set[str] = set()
-            for e_id in e_id_members:
-                mxid_members.add(external_user_ids_to_mxid_map[e_id])
-            groups_to_set_mxid[group_id] = mxid_members
-
         # Next, retrieve all known managed rooms. These all have groups assigned to them. The mapping will need to be
-        # transformed into something more usable.
+        # transformed into something more usable. If Famedly Control has suffered a reset, Synapse will be the source of
+        # truth for what rooms exist and what groups are assigned to them.
+        #
         # Mapping of "group_id" -> tuple["room_id", "room_creator"]
         group_to_room_tuple_map = await self.repository.get_rooms_by_group()
 
-        # Transform the above into mapping of:
-        # tuple["room_id", "room_creator"] -> "group_id"
+        # Invert the above into mapping of: tuple["room_id", "room_creator"] -> set of `group_id`'s
         room_tuples_to_groups: dict[tuple[str, str], set[str]] = defaultdict(set)
         for group_id, room_tuple_list in group_to_room_tuple_map.items():
             for room_tuple in room_tuple_list:
                 room_tuples_to_groups[room_tuple].add(group_id)
 
-        # Do we want to 'del group_to_room_tuple_map' at this point to get a leg up on cleaning?
-
         # Now that we have all the managed rooms, all the groups that should be in those rooms and the complete
-        # list of what members should be in each group, it's time to pull all the membership data. One room at a time :(
+        # list of what members should be in each group, it's time to reset the rooms.
         for (room_id, room_creator), groups in room_tuples_to_groups.items():
-            # There is no need to itemize by group, just lump all the users together as one big set
-            users_in_groups_set: set[str] = set.union(
-                *[groups_to_set_mxid.get(group, set()) for group in groups]
+            # Really fast way to unpack and flatten a series of sets that avoids any `None` that may have wandered in.
+            expected_eids_for_room = set.union(
+                *[
+                    groups_to_external_ids_that_should_be_joined[group_id]
+                    for group_id in groups
+                    if group_id in groups_to_external_ids_that_should_be_joined
+                ]
             )
-
-            # Same for the users already in the room. One big set
-            users_in_room_list: list[str] = (
-                await self.api._store.get_local_users_in_room(room_id)
-            )
-            users_in_room_set = set(users_in_room_list)
-            # Remember to filter out the room creator, or they will mysteriously and irritatingly disappear
-            users_in_room_set.discard(room_creator)
-
-            # Then it's pretty simple. If they are present in the group but are not already in the room, add them
-            who_to_add = users_in_groups_set.difference(users_in_room_set)
-            # If they are in the room but not present in the group, remove them
-            who_to_remove = users_in_room_set.difference(users_in_groups_set)
-
-            # Any users that used to exist but do not any longer will be dropped on the floor
-            await self.room_handler.force_join_users_to_room(
-                room_id, list(who_to_add), room_creator
-            )
-            await self.room_handler.remove_users_from_room(
-                room_creator, list(who_to_remove), room_id
+            # Most of the data was retrieved earlier, so largely this is a batch process
+            await self.room_handler.assign_groups_to_room(
+                room_id,
+                room_creator,
+                list(groups),
+                expected_eids_for_room,
+                external_user_ids_to_mxid_map,
             )
 
         # Now we just can pass back an empty response object so the syncer can process the overridden token. Since

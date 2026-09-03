@@ -568,6 +568,98 @@ class TestGroupMembershipSync(ModuleApiTestCase):
         assert self._get_membership(room_id, self.member_3) == "leave"
         assert self._get_membership(room_id, self.creator) == "join"
 
+    @patch(
+        "famedly_control_synapse.client.FamedlyControlClient.get_all_groups_diffs",
+        new_callable=AsyncMock,
+    )
+    def test_sync_reset_does_not_break_retry_queue(self, mock_get_diffs) -> None:
+        """
+        The retry queue may have entries when the sync loop resets. Make sure it does not break and any entries that
+        should not be there are gone.
+        """
+        # We start with a room. In two separate stages with two disparate tokens(acting as if the missing ones before
+        # and between were for other rooms and therefore not relevant), add a real and a missing user. This gives
+        # us a baseline and an established place to rewind to.
+        room_id = self._create_managed_room_for_sync(groups=["team_dodgeball"])
+        # Check and make sure we don't accidentally kick the room creator in this test too.
+        assert self._get_membership(room_id, self.creator) == "join"
+
+        # Per the test infrastructure, not including a specialized external ID will just use the mxid.
+        unknown_member = f"@unknown:{self.server_name_for_this_server}"
+        self.register_external_id(unknown_member)
+
+        # Set up initial state: member_1 is in the group diff. We will roll back to this one
+        initial_room_group_setup = ManyGroupsDiffResponse(
+            next_sync="1",
+            data={
+                "team_dodgeball": [
+                    DiffRecord(user_id=self.member_1, action=MembershipAction.ADD),
+                ],
+            },
+        )
+        mock_get_diffs.return_value = initial_room_group_setup
+        self.get_success(self.syncer._process_sync())
+
+        assert self.syncer._sync_token == "1"
+        assert self._get_membership(room_id, self.member_1) == "join"
+        # Recall that a membership that never existed comes across as `None` and not "leave"
+        assert self._get_membership(room_id, unknown_member) is None
+        assert self._get_membership(room_id, self.creator) == "join"
+
+        # Now add unknown_member to the group
+        mock_get_diffs.return_value = ManyGroupsDiffResponse(
+            next_sync="2",
+            data={
+                "team_dodgeball": [
+                    DiffRecord(user_id=unknown_member, action=MembershipAction.ADD),
+                ],
+            },
+        )
+        self.get_success(self.syncer._process_sync())
+        assert self.syncer._sync_token == "2"
+
+        # Nothing should have changed in the room since this is a non-existent user. Recall that a membership that never
+        # existed comes across as `None` and not "leave"
+        assert self._get_membership(room_id, unknown_member) is None
+        assert self._get_membership(room_id, self.member_1) == "join"
+        assert self._get_membership(room_id, self.creator) == "join"
+
+        # Take a peek at the retry queue
+        retry_queue = self.hs.room_control.room_handler.retry_queue
+
+        assert unknown_member in retry_queue.rooms[room_id].members
+
+        # Good. Our room is set up. Time to throw a wrench into the system. We simulate an unknown sync token error,
+        # which should immediately call the diff endpoint again to retrieve the full diff. For this we need to borrow
+        # the `side_effect` option for the get group diffs mock and assign it a function with a one-shot error that
+        # falls back to `DEFAULT` to redirect to `return_value` after it is triggered.
+        _triggered_error = False
+
+        def _one_shot_sync_token_error(*args, **kwargs) -> None:
+            nonlocal _triggered_error
+            if not _triggered_error:
+                _triggered_error = True
+                raise FamedlyUnknownSyncTokenError()
+            # `DEFAULT` should allow the trigger to be bypassed and the normal `return_value` of the mock to be used.
+            return DEFAULT
+
+        mock_get_diffs.side_effect = _one_shot_sync_token_error
+        # We can borrow our first diff for the room, since this is a test and the setup is relatively simple
+        mock_get_diffs.return_value = initial_room_group_setup
+        # This should not have changed before the syncer is poked
+        assert self.syncer._sync_token == "2"
+
+        self.get_success(self.syncer._process_sync())
+
+        assert self.syncer._sync_token == "1"
+        assert self._get_membership(room_id, unknown_member) is None
+        assert self._get_membership(room_id, self.member_1) == "join"
+        assert self._get_membership(room_id, self.creator) == "join"
+
+        # And the retry queue says....
+        assert room_id not in retry_queue.rooms
+        # assert unknown_member not in retry_queue.rooms[room_id].members
+
 
 class TestGroupMembershipSyncLoop(ModuleApiTestCase):
     """
