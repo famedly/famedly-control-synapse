@@ -119,6 +119,9 @@ class GroupMembershipSyncer:
                 sync=self._sync_token, timeout=self.polling_interval_seconds
             )
         except FamedlyUnknownSyncTokenError:
+            logger.warning(
+                "Unexpected get_all_groups_diffs sync token reset, requesting full diff"
+            )
             # The token was rejected, re-request with no sync token to get the full diff.
             full_response = await self.client.get_all_groups_diffs(sync=None)
             # Process the full diff to find the actual delta of what should have changed then persist it. This will
@@ -279,13 +282,15 @@ class GroupMembershipSyncer:
         # list of what members should be in each group, it's time to reset the rooms.
         for (room_id, room_creator), groups in room_tuples_to_groups.items():
             # Really fast way to unpack and flatten a series of sets that avoids any `None` that may have wandered in.
-            expected_eids_for_room = set.union(
+            # Empty set is an empty room.
+            expected_eids_for_room: set[str] = set(
                 *[
                     groups_to_external_ids_that_should_be_joined[group_id]
                     for group_id in groups
                     if group_id in groups_to_external_ids_that_should_be_joined
                 ]
             )
+
             # Most of the data was retrieved earlier, so largely this is a batch process
             await self.room_handler.assign_groups_to_room(
                 room_id,
