@@ -24,7 +24,11 @@ from twisted.internet.testing import MemoryReactor
 from twisted.trial import unittest
 from twisted.web.http_headers import Headers
 
-from famedly_control_synapse.client import FamedlyControlClient, FamedlyControlError
+from famedly_control_synapse.client import (
+    FamedlyControlClient,
+    FamedlyControlError,
+    FamedlyUnknownSyncTokenError,
+)
 from famedly_control_synapse.config import FamedlyControlConfig
 from tests.utils.jwt_keys import JWT_AUTH_CONFIG
 from tests.utils.module_api_testcase import ModuleApiTestCase
@@ -207,7 +211,7 @@ class TestClientResponse(ModuleApiTestCase):
         failure = self.get_failure(
             self.client.get_group_members("test_group"), FamedlyControlError
         )
-        self.assertEqual(failure.value.code, 500)
+
         assert failure.value.code == 500
         assert (
             failure.value.msg
@@ -282,4 +286,54 @@ class TestClientResponse(ModuleApiTestCase):
         assert (
             failure.value.msg
             == "Famedly Control API: Unexpected error: something broke"
+        )
+
+    def test_groups_diffs_request_fail_with_invalid_api_type_error(self) -> None:
+        """
+        Test that client returning 200 with Err message including no type raises `FamedlyControlError` with 500 code.
+        NOTE that this is to test basic validation of the other error response model and that it functions as expected.
+        """
+        self.client.http_client.post_json_get_json = AsyncMock(
+            return_value={"Err": {"Api": "SomeRandomError"}}
+        )
+        failure = self.get_failure(
+            self.client.get_all_groups_diffs("1"), FamedlyControlError
+        )
+
+        assert failure.value.code == 500
+        assert (
+            failure.value.msg == "Famedly Control API: Unexpected error response format"
+        )
+
+    def test_groups_diffs_request_fail_with_invalid_request_type_error(self) -> None:
+        """
+        Test that client returning 200 with Err message including InvalidRequest specific errors raises
+        `FamedlyControlError` with 500 code.
+        """
+        self.client.http_client.post_json_get_json = AsyncMock(
+            return_value={
+                "Err": {
+                    "type": "InvalidRequest",
+                    "errors": [{"foot": "My Foot hurts!"}],
+                }
+            }
+        )
+        failure = self.get_failure(
+            self.client.get_all_groups_diffs("1"), FamedlyControlError
+        )
+
+        assert failure.value.code == 400
+        assert (
+            failure.value.msg
+            == "Famedly Control API: InvalidRequest, self.errors=[{'foot': 'My Foot hurts!'}]"
+        )
+
+    def test_groups_diffs_request_fail_with_unknown_sync_token_error(self) -> None:
+        """Test that client returns 200 with Err message with unknown type raises `FamedlyUnknownSyncTokenError`."""
+        self.client.http_client.post_json_get_json = AsyncMock(
+            return_value={"Err": {"type": "Api", "error": "UnknownSyncToken"}}
+        )
+        # There isn't really much to do here, the Exception itself is boring by design
+        self.get_failure(
+            self.client.get_all_groups_diffs("1"), FamedlyUnknownSyncTokenError
         )

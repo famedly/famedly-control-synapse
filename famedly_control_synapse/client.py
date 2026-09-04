@@ -68,10 +68,38 @@ class FamedlyControlErrorResponse(BaseModel):
     """An error response from Famedly Control API. Everything inside the `Err` object."""
 
     type: str
+    errors: list[dict[str, str]] | None = None
+    "Used by the 'InvalidRequest' error type. When present, should be an mapping of 'path' to a str and 'error' to a str."
+
+    # TODO: after minimum python version becomes 3.11, change return type here to `Never` per python docs.
+    def raise_famedly_control_error(self) -> NoReturn:
+        """
+        This is an error class. Raise the error with appropriate messages and codes depending on what type of error it
+        is.
+        """
+        if self.type not in _ERROR_TYPE_TO_STATUS_CODE:
+            status_code = HTTPStatus.INTERNAL_SERVER_ERROR
+            msg = f"Famedly Control API: Unknown error type: {self.type}"
+            raise FamedlyControlError(status_code, msg)
+
+        status_code = _ERROR_TYPE_TO_STATUS_CODE[self.type]
+
+        # Special case error types.
+        if self.type == "InvalidRequest":
+            # "InvalidRequest" can have a few extra details that can be surfaced.
+            msg = f"Famedly Control API: {self.type}, {self.errors=}"
+
+        else:
+            msg = f"Famedly Control API: Error in response: {self.type}"
+
+        raise FamedlyControlError(status_code, msg)
+
+
+class FamedlyControlGroupDiffErrorResponse(FamedlyControlErrorResponse):
+    """Special casing to surface Api specific errors such as for the UnknownSyncToken"""
+
     error: str | None = None
     "Used by the 'Api' error type"
-    errors: dict[str, str] | None = None
-    "Used by the 'InvalidRequest' error type. When present, should be an mapping of 'path' to a str and 'error' to a str."
 
     # TODO: after minimum python version becomes 3.11, change return type here to `Never` per python docs.
     def raise_famedly_control_error(self) -> NoReturn:
@@ -109,15 +137,26 @@ class FamedlyControlClient:
         self.url = config.famedly_control.api_url.encoded_string().rstrip("/")
         self.http_client = api.http_client
 
-    async def _request(self, uri: str, body: dict, model: type[_T]) -> _T:
+    async def _request(
+        self,
+        uri: str,
+        body: dict,
+        model: type[_T],
+        error_response_model: type[
+            FamedlyControlErrorResponse
+        ] = FamedlyControlErrorResponse,
+    ) -> _T:
         """POST to the Famedly Control API and return a validated response model.
 
         Args:
             uri: The full URI to POST to.
             body: The JSON body to include in the POST request.
             model: The Pydantic model class to validate the "Ok" response against.
+            error_response_model: The Pydantic model to use for validating the InfallibleApiError response
 
         Raises:
+            FamedlyUnknownSyncTokenError: For specific error involving the requested 'sync' token. Triggers a sync loop
+                reset.
             FamedlyControlError: For all error conditions (API errors, network
                 failures, validation errors, or any other unexpected exception).
         """
@@ -149,9 +188,7 @@ class FamedlyControlClient:
         if "Err" in response:
             try:
                 err_object = response["Err"]
-                err_response_model = FamedlyControlErrorResponse.model_validate(
-                    err_object
-                )
+                err_response_model = error_response_model.model_validate(err_object)
             except ValidationError as e:
                 logger.warning(f"Famedly Control API: Validation error: {e}")
                 raise FamedlyControlError(
@@ -221,6 +258,7 @@ class FamedlyControlClient:
             self.url + "/get_all_groups_diffs",
             body,
             ManyGroupsDiffResponse,
+            error_response_model=FamedlyControlGroupDiffErrorResponse,
         )
 
 
