@@ -13,13 +13,17 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
 import logging
+from collections import defaultdict
 
 from synapse.module_api import ModuleApi
 from synapse.util.duration import Duration
+from synapse.util.metrics import measure_func
 
 from famedly_control_synapse.client import (
     DiffRecord,
     FamedlyControlClient,
+    FamedlyUnknownSyncTokenError,
+    ManyGroupsDiffResponse,
     MembershipAction,
 )
 from famedly_control_synapse.config import FamedlyControlConfig
@@ -45,6 +49,8 @@ class GroupMembershipSyncer:
         self.client = client
         self.room_handler = room_handler
         self.repository = repository
+        # Clock( and server_name) are used by the `@measure_func` decorator to add metrics for appropriate functions.
+        self.clock = api._clock
         self.server_name = api.server_name
         self.polling_interval_seconds = config.sync_polling_interval_seconds
         self.is_enabled = config.sync_enabled
@@ -108,9 +114,20 @@ class GroupMembershipSyncer:
         Long poll for the response. If a 'next_sync' token is returned, use that on the
         next request.
         """
-        response = await self.client.get_all_groups_diffs(
-            sync=self._sync_token, timeout=self.polling_interval_seconds
-        )
+        try:
+            response = await self.client.get_all_groups_diffs(
+                sync=self._sync_token, timeout=self.polling_interval_seconds
+            )
+        except FamedlyUnknownSyncTokenError:
+            logger.warning(
+                "Unexpected get_all_groups_diffs sync token reset, requesting full diff"
+            )
+            # The token was rejected, re-request with no sync token to get the full diff.
+            full_response = await self.client.get_all_groups_diffs(sync=None)
+            # Process the full diff to find the actual delta of what should have changed then persist it. This will
+            # return a new ManyGroupsDiffResponse with the corrected token and empty data. Everything should pass
+            # through and then correctly save the new token at the end.
+            response = await self._reset_and_process_complete_diff(full_response)
 
         if response.next_sync == self._sync_token:
             return
@@ -214,3 +231,72 @@ class GroupMembershipSyncer:
             external_ids_to_add=external_ids_to_add,
             external_ids_to_remove=external_ids_to_remove,
         )
+
+    @measure_func("FamedlyControl_reset_all_group_diffs")
+    async def _reset_and_process_complete_diff(
+        self, diff_response: ManyGroupsDiffResponse
+    ) -> ManyGroupsDiffResponse:
+        """
+        Accept a ManyGroupsDiffResponse that provides the new sync token and the full mapping of group diffs.
+        """
+        # Build a full mapping of all groups from the response. Inside should be a set of all external user ids that
+        # should ultimately be in a given room.
+        # Since there is no known way to know if the list of diff actions is de-duplicated, the list will be processed
+        # in order. Later entries may overwrite earlier entries.
+        groups_to_external_ids_that_should_be_joined: dict[str, set[str]] = {}
+        for group_id, list_of_diffs in diff_response.data.items():
+            working_group = groups_to_external_ids_that_should_be_joined.setdefault(
+                group_id, set()
+            )
+            for diff in list_of_diffs:
+                if diff.action == MembershipAction.REM:
+                    working_group.discard(diff.external_user_id)
+                if diff.action == MembershipAction.ADD:
+                    working_group.add(diff.external_user_id)
+
+        # Retrieve in one query all the external user id's in the above mapping. This will be needed later to translate
+        # who is who.
+        external_user_ids_to_mxid_map = (
+            await self.room_handler.batch_convert_external_user_ids_to_matrix_user_ids(
+                set().union(*groups_to_external_ids_that_should_be_joined.values())
+            )
+        )
+
+        # Next, retrieve all known managed rooms. These all have groups assigned to them. The mapping will need to be
+        # transformed into something more usable. If Famedly Control has suffered a reset, Synapse will be the source of
+        # truth for what rooms exist and what groups are assigned to them.
+        #
+        # Mapping of "group_id" -> tuple["room_id", "room_creator"]
+        group_to_room_tuple_map = await self.repository.get_rooms_by_group()
+
+        # Invert the above into mapping of: tuple["room_id", "room_creator"] -> set of `group_id`'s
+        room_tuples_to_groups: dict[tuple[str, str], set[str]] = defaultdict(set)
+        for group_id, room_tuple_list in group_to_room_tuple_map.items():
+            for room_tuple in room_tuple_list:
+                room_tuples_to_groups[room_tuple].add(group_id)
+
+        # Now that we have all the managed rooms, all the groups that should be in those rooms and the complete
+        # list of what members should be in each group, it's time to reset the rooms.
+        for (room_id, room_creator), groups in room_tuples_to_groups.items():
+            # Really fast way to unpack and flatten a series of sets that avoids any `None` that may have wandered in.
+            # Empty set is an empty room.
+            expected_eids_for_room: set[str] = set(
+                *[
+                    groups_to_external_ids_that_should_be_joined[group_id]
+                    for group_id in groups
+                    if group_id in groups_to_external_ids_that_should_be_joined
+                ]
+            )
+
+            # Most of the data was retrieved earlier, so largely this is a batch process
+            await self.room_handler.assign_groups_to_room(
+                room_id,
+                room_creator,
+                list(groups),
+                expected_eids_for_room,
+                external_user_ids_to_mxid_map,
+            )
+
+        # Now we just can pass back an empty response object so the syncer can process the overridden token. Since
+        # `data` is empty the normal join/leave process is skipped
+        return ManyGroupsDiffResponse(next_sync=diff_response.next_sync, data={})
