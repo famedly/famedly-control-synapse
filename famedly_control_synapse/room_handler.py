@@ -457,7 +457,7 @@ class ManagedRoomHandler:
         )
 
     async def batch_convert_external_user_ids_to_matrix_user_ids(
-        self, external_user_ids: list[str]
+        self, external_user_ids: Iterable[str]
     ) -> dict[str, str]:
         """Convert multiple external user IDs to Matrix user IDs in a single database query.
 
@@ -608,7 +608,7 @@ class ManagedRoomHandler:
         if external_to_mxid_mapping is None:
             external_to_mxid_mapping = (
                 await self.batch_convert_external_user_ids_to_matrix_user_ids(
-                    list(expected_member_external_ids)
+                    expected_member_external_ids
                 )
             )
         not_found_external_ids = parse_missing_items(
@@ -765,7 +765,7 @@ class ManagedRoomHandler:
                 # Batch the call to get all the external user ids that may have been found
                 external_id_to_mxids_mapping = (
                     await self.batch_convert_external_user_ids_to_matrix_user_ids(
-                        list(room_queue.external_ids.keys())
+                        room_queue.external_ids.keys()
                     )
                 )
 

@@ -232,7 +232,7 @@ class GroupMembershipSyncer:
             external_ids_to_remove=external_ids_to_remove,
         )
 
-    @measure_func()
+    @measure_func("FamedlyControl_reset_all_group_diffs")
     async def _reset_and_process_complete_diff(
         self, diff_response: ManyGroupsDiffResponse
     ) -> ManyGroupsDiffResponse:
@@ -256,12 +256,9 @@ class GroupMembershipSyncer:
 
         # Retrieve in one query all the external user id's in the above mapping. This will be needed later to translate
         # who is who.
-        all_external_user_ids_as_a_set: set[str] = set().union(
-            *groups_to_external_ids_that_should_be_joined.values()
-        )
         external_user_ids_to_mxid_map = (
             await self.room_handler.batch_convert_external_user_ids_to_matrix_user_ids(
-                list(all_external_user_ids_as_a_set)
+                set().union(*groups_to_external_ids_that_should_be_joined.values())
             )
         )
 
