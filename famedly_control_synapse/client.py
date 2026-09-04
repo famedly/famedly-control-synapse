@@ -71,6 +71,12 @@ class FamedlyControlErrorResponse(BaseModel):
     errors: list[dict[str, str]] | None = None
     "Used by the 'InvalidRequest' error type. When present, should be an mapping of 'path' to a str and 'error' to a str."
 
+    def get_error_message(self) -> str | None:
+        if self.type == "InvalidRequest":
+            # "InvalidRequest" can have a few extra details that can be surfaced.
+            return f"Famedly Control API: {self.type}, {self.errors=}"
+        return f"Famedly Control API: Error in response: {self.type}"
+
     # TODO: after minimum python version becomes 3.11, change return type here to `Never` per python docs.
     def raise_famedly_control_error(self) -> NoReturn:
         """
@@ -84,15 +90,7 @@ class FamedlyControlErrorResponse(BaseModel):
 
         status_code = _ERROR_TYPE_TO_STATUS_CODE[self.type]
 
-        # Special case error types.
-        if self.type == "InvalidRequest":
-            # "InvalidRequest" can have a few extra details that can be surfaced.
-            msg = f"Famedly Control API: {self.type}, {self.errors=}"
-
-        else:
-            msg = f"Famedly Control API: Error in response: {self.type}"
-
-        raise FamedlyControlError(status_code, msg)
+        raise FamedlyControlError(status_code, self.get_error_message())
 
 
 class FamedlyControlGroupDiffErrorResponse(FamedlyControlErrorResponse):
@@ -101,34 +99,14 @@ class FamedlyControlGroupDiffErrorResponse(FamedlyControlErrorResponse):
     error: str | None = None
     "Used by the 'Api' error type"
 
-    # TODO: after minimum python version becomes 3.11, change return type here to `Never` per python docs.
-    def raise_famedly_control_error(self) -> NoReturn:
-        """
-        This is an error class. Raise the error with appropriate messages and codes depending on what type of error it
-        is.
-        """
-        if self.type not in _ERROR_TYPE_TO_STATUS_CODE:
-            status_code = HTTPStatus.INTERNAL_SERVER_ERROR
-            msg = f"Famedly Control API: Unknown error type: {self.type}"
-            raise FamedlyControlError(status_code, msg)
-
-        status_code = _ERROR_TYPE_TO_STATUS_CODE[self.type]
-
-        # Special case error types.
+    def get_error_message(self) -> str | None:
         if self.type == "Api":
-            # "Api" can have explicit sub-errors.
+            # "Api" can have explicit sub-errors, but only when calling get_all_groups_diffs endpoint.
             if self.error == FamedlyControlApiErrorCodes.UNKNOWN_SYNC_TOKEN:
                 raise FamedlyUnknownSyncTokenError()
-            msg = f"Famedly Control API: {self.type}, {self.error=}"
+            return f"Famedly Control API: {self.type}, {self.error=}"
 
-        elif self.type == "InvalidRequest":
-            # "InvalidRequest" can have a few extra details that can be surfaced.
-            msg = f"Famedly Control API: {self.type}, {self.errors=}"
-
-        else:
-            msg = f"Famedly Control API: Error in response: {self.type}"
-
-        raise FamedlyControlError(status_code, msg)
+        return super().get_error_message()
 
 
 class FamedlyControlClient:
