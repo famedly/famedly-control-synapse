@@ -69,7 +69,7 @@ class FamedlyControlErrorResponse(BaseModel):
 
     type: str
     errors: list[dict[str, str]] | None = None
-    "Used by the 'InvalidRequest' error type. When present, should be an mapping of 'path' to a str and 'error' to a str."
+    """Used by the 'InvalidRequest' error type. When present, should be an mapping of 'path' to a str and 'error' to a str."""
 
     def get_error_message(self) -> str | None:
         if self.type == "InvalidRequest":
@@ -97,7 +97,7 @@ class FamedlyControlGroupDiffErrorResponse(FamedlyControlErrorResponse):
     """Special casing to surface Api specific errors such as for the UnknownSyncToken"""
 
     error: str | None = None
-    "Used by the 'Api' error type"
+    """Used by the 'Api' error type"""
 
     def get_error_message(self) -> str | None:
         if self.type == "Api":
