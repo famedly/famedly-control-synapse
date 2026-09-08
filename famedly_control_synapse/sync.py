@@ -13,7 +13,6 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
 import logging
-from collections import defaultdict
 
 from synapse.module_api import ModuleApi
 from synapse.util.duration import Duration
@@ -254,7 +253,7 @@ class GroupMembershipSyncer:
                 if diff.action == MembershipAction.ADD:
                     working_group.add(diff.external_user_id)
 
-        # Retrieve in one query all the external user id's in the above mapping. This will be needed later to translate
+        # Retrieve in one query all the external user ids in the above mapping. This will be needed later to translate
         # who is who.
         external_user_ids_to_mxid_map = (
             await self.room_handler.batch_convert_external_user_ids_to_matrix_user_ids(
@@ -270,17 +269,27 @@ class GroupMembershipSyncer:
         group_to_room_tuple_map = await self.repository.get_rooms_by_group()
 
         # Invert the above into mapping of: tuple["room_id", "room_creator"] -> set of `group_id`'s
-        room_tuples_to_groups: dict[tuple[str, str], set[str]] = defaultdict(set)
+        room_tuples_to_groups: dict[tuple[str, str], set[str]] = {}
         for group_id, room_tuple_list in group_to_room_tuple_map.items():
             for room_tuple in room_tuple_list:
-                room_tuples_to_groups[room_tuple].add(group_id)
+                # Pull the reference even though it may not be used. This establishes the empty set().
+                #
+                # If this does not get done then the room's account data would not be updated. This will confuse Famedly
+                # Control when next it checks our list of rooms and finds group ids it knows nothing about.
+                working_room = room_tuples_to_groups.setdefault(room_tuple, set())
+                if group_id not in groups_to_external_ids_that_should_be_joined:
+                    # Found a group ID in an existing room that is not in the full diff. This group is now null and void
+                    continue
+
+                working_room.add(group_id)
 
         # Now that we have all the managed rooms, all the groups that should be in those rooms and the complete
         # list of what members should be in each group, it's time to reset the rooms.
         for (room_id, room_creator), groups in room_tuples_to_groups.items():
             # Really fast way to unpack and flatten a series of sets that avoids any `None` that may have wandered in.
-            # Empty set is an empty room.
-            expected_eids_for_room: set[str] = set(
+            # Empty set is an empty room. Currently, we do not delete empty rooms. That is Famedly Control's
+            # responsibility.
+            expected_eids_for_room: set[str] = set().union(
                 *[
                     groups_to_external_ids_that_should_be_joined[group_id]
                     for group_id in groups

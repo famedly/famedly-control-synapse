@@ -1,3 +1,4 @@
+import json
 from http import HTTPStatus
 from unittest.mock import DEFAULT, AsyncMock, patch
 
@@ -18,6 +19,7 @@ from famedly_control_synapse.client import (
 from famedly_control_synapse.repository import ManagedRoomRepository
 from famedly_control_synapse.rest.types import CreateManagedRoomRequest
 from famedly_control_synapse.sync import GroupMembershipSyncer
+from famedly_control_synapse.types import MANAGED_ROOM_TYPE
 from tests.utils.module_api_testcase import ModuleApiTestCase
 
 
@@ -658,7 +660,245 @@ class TestGroupMembershipSync(ModuleApiTestCase):
 
         # And the retry queue says....
         assert room_id not in retry_queue.rooms
-        # assert unknown_member not in retry_queue.rooms[room_id].members
+
+    @patch(
+        "famedly_control_synapse.client.FamedlyControlClient.get_all_groups_diffs",
+        new_callable=AsyncMock,
+    )
+    def test_sync_token_reset_handles_multiple_groups(self, mock_get_diffs) -> None:
+        """
+        Rooms with multiple groups should not crash the system(potential iterator unpacking oversight issue)
+        """
+        # We start with one room that has three groups with no overlapping users. We will add users to the first two
+        # groups that do not overlap, then add users to the third group where one overlaps with existing group and one
+        # user not seen yet). The reset should rewind to before the third group has users. The user that would have
+        # overlapped should still be in the room and never seen before user should be removed.
+
+        room_id = self._create_managed_room_for_sync(
+            groups=["group1", "group2", "group3"]
+        )
+        # Check and make sure we don't accidentally kick the room creator in this test too.
+        assert self._get_membership(room_id, self.creator) == "join"
+
+        # Only add users to the first two groups here. This will be our rollback point
+        initial_room_sync_token = "2"
+        initial_room_group_setup = ManyGroupsDiffResponse(
+            next_sync=initial_room_sync_token,
+            data={
+                "group1": [
+                    DiffRecord(user_id=self.member_1, action=MembershipAction.ADD),
+                ],
+                "group2": [
+                    DiffRecord(user_id=self.member_2, action=MembershipAction.ADD),
+                ],
+            },
+        )
+        mock_get_diffs.return_value = initial_room_group_setup
+        self.get_success(self.syncer._process_sync())
+
+        assert self.syncer._sync_token == initial_room_sync_token
+        assert self._get_membership(room_id, self.member_1) == "join"
+        assert self._get_membership(room_id, self.member_2) == "join"
+        assert self._get_membership(room_id, self.member_3) is None
+        assert self._get_membership(room_id, self.creator) == "join"
+
+        # Users member_1 and member_2 are in the room. Amend group3 to include not only member_1 but also member_3
+        reset_room_sync_token = "4"
+        mock_get_diffs.return_value = ManyGroupsDiffResponse(
+            next_sync=reset_room_sync_token,
+            data={
+                "group3": [
+                    DiffRecord(user_id=self.member_1, action=MembershipAction.ADD),
+                    DiffRecord(user_id=self.member_3, action=MembershipAction.ADD),
+                ],
+            },
+        )
+        self.get_success(self.syncer._process_sync())
+
+        assert self.syncer._sync_token == reset_room_sync_token
+        assert self._get_membership(room_id, self.member_1) == "join"
+        assert self._get_membership(room_id, self.member_2) == "join"
+        assert self._get_membership(room_id, self.member_3) == "join"
+        assert self._get_membership(room_id, self.creator) == "join"
+
+        # Good. Our room is set up. Time to throw a wrench into the system. We simulate an unknown sync token error,
+        # which should immediately call the diff endpoint again to retrieve the full diff. For this we need to borrow
+        # the `side_effect` option for the get group diffs mock and assign it a function with a one-shot error that
+        # falls back to `DEFAULT` to redirect to `return_value` after it is triggered.
+        _triggered_error = False
+
+        def _one_shot_sync_token_error(*args, **kwargs) -> None:
+            nonlocal _triggered_error
+            if not _triggered_error:
+                _triggered_error = True
+                raise FamedlyUnknownSyncTokenError()
+            # `DEFAULT` should allow the trigger to be bypassed and the normal `return_value` of the mock to be used.
+            return DEFAULT
+
+        mock_get_diffs.side_effect = _one_shot_sync_token_error
+        # We can borrow our first diff for the room, since this is a test and the setup is relatively simple
+        mock_get_diffs.return_value = initial_room_group_setup
+        # This should not have changed before the syncer is poked
+        assert self.syncer._sync_token == reset_room_sync_token
+
+        self.get_success(self.syncer._process_sync())
+
+        assert self.syncer._sync_token == initial_room_sync_token
+        assert self._get_membership(room_id, self.member_1) == "join"
+        assert self._get_membership(room_id, self.member_2) == "join"
+        assert self._get_membership(room_id, self.member_3) == "leave"
+        assert self._get_membership(room_id, self.creator) == "join"
+
+    @patch(
+        "famedly_control_synapse.client.FamedlyControlClient.get_all_groups_diffs",
+        new_callable=AsyncMock,
+    )
+    def test_sync_token_reset_removes_unknown_groups(self, mock_get_diffs) -> None:
+        """
+        On sync token reset, group ids that do not exist in the diff need to be stripped from rooms.
+
+        """
+        database_pool = self.hs.datastores.main.db_pool
+
+        def assert_groups_for_account_data(
+            expected_present: list[str] | None = None,
+            expected_absent: list[str] | None = None,
+        ) -> None:
+            """
+            Quick and dirty room account data inspection for what group ids should be
+            in the data and which should be missing.
+            """
+            # Make sure it's always a list, because while passing [] directly is explicit, it is also ugly
+            if expected_present is None:
+                expected_present = []
+            if expected_absent is None:
+                expected_absent = []
+
+            _data_as_json_str = self.get_success(
+                database_pool.simple_select_one_onecol(
+                    "room_account_data",
+                    {"room_id": room_id, "account_data_type": MANAGED_ROOM_TYPE},
+                    "content",
+                )
+            )
+            _data = json.loads(_data_as_json_str)
+            assert "groups" in _data, _data
+            _groups_list = _data["groups"]
+            # all of these should be present
+            assert all(
+                _group_id in _groups_list for _group_id in expected_present
+            ), f"{expected_present=}, {_groups_list=}"
+            # all of these should be absent
+            assert all(
+                _group_id not in _groups_list for _group_id in expected_absent
+            ), f"{expected_absent=}, {_groups_list=}"
+
+        # We start with one room that has two groups with no overlapping users. We will add users to these first two
+        # groups that do not overlap, then add users to the third group where one overlaps with existing group and one
+        # user not seen yet. The account data for this room should have all three groups.
+        # The reset should rewind to before the third group was part of the room. The user that would have overlapped
+        # should still be in the room and never seen before user should be removed. The account data should no longer
+        # contain the third group.
+
+        room_id = self._create_managed_room_for_sync(groups=["group1", "group2"])
+        # Check and make sure we don't accidentally kick the room creator in this test too.
+        assert self._get_membership(room_id, self.creator) == "join"
+
+        # Only add users to the first two groups here. This will be our rollback point
+        initial_room_sync_token = "2"
+        initial_room_group_setup = ManyGroupsDiffResponse(
+            next_sync=initial_room_sync_token,
+            data={
+                "group1": [
+                    DiffRecord(user_id=self.member_1, action=MembershipAction.ADD),
+                ],
+                "group2": [
+                    DiffRecord(user_id=self.member_2, action=MembershipAction.ADD),
+                ],
+            },
+        )
+        mock_get_diffs.return_value = initial_room_group_setup
+        self.get_success(self.syncer._process_sync())
+
+        assert self.syncer._sync_token == initial_room_sync_token
+        assert self._get_membership(room_id, self.member_1) == "join"
+        assert self._get_membership(room_id, self.member_2) == "join"
+        assert self._get_membership(room_id, self.member_3) is None
+        assert self._get_membership(room_id, self.creator) == "join"
+
+        # Snag a peek at the account data for the room.
+        assert_groups_for_account_data(
+            expected_present=["group1", "group2"], expected_absent=["group3"]
+        )
+
+        # Users member_1 and member_2 are in the room. Add empty group3 to the room. Then in a separate step(because we
+        # are doing the sync token reset and therefore need to have a sync token to roll back) add member_1 and member_3
+        # to group3
+        # By specifying exactly what external users to expect, we avoid the call to the get groups endpoint and don't
+        # have to patch!
+        expected_member_e_ids = {self.member_1, self.member_2}
+        self.get_success(
+            self.syncer.room_handler.assign_groups_to_room(
+                room_id,
+                self.creator,
+                ["group1", "group2", "group3"],
+                expected_member_external_ids=expected_member_e_ids,
+            )
+        )
+        reset_room_sync_token = "4"
+        mock_get_diffs.return_value = ManyGroupsDiffResponse(
+            next_sync=reset_room_sync_token,
+            data={
+                "group3": [
+                    DiffRecord(user_id=self.member_1, action=MembershipAction.ADD),
+                    DiffRecord(user_id=self.member_3, action=MembershipAction.ADD),
+                ],
+            },
+        )
+        self.get_success(self.syncer._process_sync())
+
+        assert self.syncer._sync_token == reset_room_sync_token
+        assert self._get_membership(room_id, self.member_1) == "join"
+        assert self._get_membership(room_id, self.member_2) == "join"
+        assert self._get_membership(room_id, self.member_3) == "join"
+        assert self._get_membership(room_id, self.creator) == "join"
+
+        # Opportunity to check the account data, see what groups are expected in this room
+        assert_groups_for_account_data(expected_present=["group1", "group2", "group3"])
+
+        # Good. Our room is set up. Time to throw a wrench into the system. We simulate an unknown sync token error,
+        # which should immediately call the diff endpoint again to retrieve the full diff. For this we need to borrow
+        # the `side_effect` option for the get group diffs mock and assign it a function with a one-shot error that
+        # falls back to `DEFAULT` to redirect to `return_value` after it is triggered.
+        _triggered_error = False
+
+        def _one_shot_sync_token_error(*args, **kwargs) -> None:
+            nonlocal _triggered_error
+            if not _triggered_error:
+                _triggered_error = True
+                raise FamedlyUnknownSyncTokenError()
+            # `DEFAULT` should allow the trigger to be bypassed and the normal `return_value` of the mock to be used.
+            return DEFAULT
+
+        mock_get_diffs.side_effect = _one_shot_sync_token_error
+        # We can borrow our first diff for the room, since this is a test and the setup is relatively simple
+        mock_get_diffs.return_value = initial_room_group_setup
+        # This should not have changed before the syncer is poked
+        assert self.syncer._sync_token == reset_room_sync_token
+
+        self.get_success(self.syncer._process_sync())
+
+        assert self.syncer._sync_token == initial_room_sync_token
+        assert self._get_membership(room_id, self.member_1) == "join"
+        assert self._get_membership(room_id, self.member_2) == "join"
+        assert self._get_membership(room_id, self.member_3) == "leave"
+        assert self._get_membership(room_id, self.creator) == "join"
+
+        # Ok, this is why we are here. Check the account data, see what groups are expected in this room. "group3"
+        # should be missing
+        assert_groups_for_account_data(
+            expected_present=["group1", "group2"], expected_absent=["group3"]
+        )
 
 
 GroupsMappingType = dict[str, list[str]]
