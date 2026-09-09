@@ -242,9 +242,9 @@ class TestClientResponse(ModuleApiTestCase):
         failure = self.get_failure(
             self.client.get_group_members("test_group"), FamedlyControlError
         )
-        assert failure.value.code == 500
-        assert (
-            failure.value.msg == "Famedly Control API: Unexpected error response format"
+        assert failure.value.code == 502
+        assert failure.value.msg.startswith(
+            "Famedly Control API: Unexpected error response format"
         )
 
     def test_request_fail_with_unexpected_response(self) -> None:
@@ -316,9 +316,9 @@ class TestClientResponse(ModuleApiTestCase):
             self.client.get_all_groups_diffs("1"), FamedlyControlError
         )
 
-        assert failure.value.code == 500
-        assert (
-            failure.value.msg == "Famedly Control API: Unexpected error response format"
+        assert failure.value.code == 502
+        assert failure.value.msg.startswith(
+            "Famedly Control API: Unexpected error response format"
         )
 
     def test_groups_diffs_request_fail_with_invalid_request_type_error(self) -> None:

@@ -1,4 +1,5 @@
 import logging
+from collections.abc import Callable
 from enum import Enum
 from http import HTTPStatus
 from typing import Final, Literal, NoReturn, TypeVar
@@ -78,7 +79,9 @@ class FamedlyControlErrorResponse(BaseModel):
         return f"Famedly Control API: Error in response: {self.type}"
 
     # TODO: after minimum python version becomes 3.11, change return type here to `Never` per python docs.
-    def raise_famedly_control_error(self) -> NoReturn:
+    def raise_famedly_control_error(
+        self, auth_invalidate_cb: Callable[[], None]
+    ) -> NoReturn:
         """
         This is an error class. Raise the error with appropriate messages and codes depending on what type of error it
         is.
@@ -89,6 +92,12 @@ class FamedlyControlErrorResponse(BaseModel):
             raise FamedlyControlError(status_code, msg)
 
         status_code = _ERROR_TYPE_TO_STATUS_CODE[self.type]
+
+        if self.type == "Unauthorized":
+            # The token was rejected; drop it so the next request exchanges a fresh one instead of resending the
+            # same rejected credential.
+            # XXX: This is not tested for!! I had forgotten to include it and tests passed
+            auth_invalidate_cb()
 
         raise FamedlyControlError(status_code, self.get_error_message())
 
@@ -138,9 +147,21 @@ class FamedlyControlClient:
             FamedlyControlError: For all error conditions (API errors, network
                 failures, validation errors, or any other unexpected exception).
         """
+        response = await self._post_json(uri, body)
+        if "Err" in response:
+            self._handle_err(response, error_response_model=error_response_model)
+        try:
+            return model.model_validate(response["Ok"])
+        except (ValidationError, KeyError) as e:
+            # KeyError from "Ok" not being in the `response` dict
+            msg = f"Famedly Control API: Unexpected response format: {response}"
+            logger.error(msg + f"\n{e}")
+            raise FamedlyControlError(HTTPStatus.BAD_GATEWAY, msg)
+
+    async def _post_json(self, uri: str, body: dict) -> JsonDict:
         try:
             token = await self._auth.get_access_token()
-            response = await self.http_client.post_json_get_json(
+            return await self.http_client.post_json_get_json(
                 uri,
                 body,
                 headers={"Authorization": [f"Bearer {token}"]},
@@ -163,32 +184,21 @@ class FamedlyControlClient:
             logger.error(msg)
             raise FamedlyControlError(msg=msg, errcode=errcode) from e
 
-        if "Err" in response:
-            try:
-                err_object = response["Err"]
-                err_response_model = error_response_model.model_validate(err_object)
-            except ValidationError as e:
-                logger.warning(f"Famedly Control API: Validation error: {e}")
-                raise FamedlyControlError(
-                    HTTPStatus.INTERNAL_SERVER_ERROR,
-                    "Famedly Control API: Unexpected error response format",
-                )
-            else:
-                if err_response_model.type == "Unauthorized":
-                    # The token was rejected; drop it so the next request exchanges a fresh one instead of resending the
-                    # same rejected credential.
-                    # XXX: This is not tested for!! I had forgotten to include it and tests passed
-                    self._auth.invalidate()
-
-                err_response_model.raise_famedly_control_error()
-
+    def _handle_err(
+        self,
+        response: JsonDict,
+        error_response_model: type[FamedlyControlErrorResponse],
+    ) -> NoReturn:
         try:
-            return model.model_validate(response["Ok"])
-        except (ValidationError, KeyError) as e:
-            # KeyError from "Ok" not being in the `response` dict
-            msg = f"Famedly Control API: Unexpected response format: {response}"
+            err_object = response["Err"]
+            err_response_model = error_response_model.model_validate(err_object)
+        except ValidationError as e:
+            msg = f"Famedly Control API: Unexpected error response format: {response}"
             logger.error(msg + f"\n{e}")
             raise FamedlyControlError(HTTPStatus.BAD_GATEWAY, msg)
+        else:
+            # This will raise directly
+            err_response_model.raise_famedly_control_error(self._auth.invalidate)
 
     async def get_group_members(self, group_id: str) -> list[str]:
         """Get the current members of a group.
