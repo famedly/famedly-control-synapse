@@ -12,6 +12,7 @@
 #
 # You should have received a copy of the GNU Affero General Public License
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
+from http import HTTPStatus
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from parameterized import parameterized
@@ -202,6 +203,21 @@ class TestClientResponse(ModuleApiTestCase):
             self.client.get_group_members("test_group"), FamedlyControlError
         )
         self.client._auth.invalidate.assert_not_called()
+
+    def test_401_error_does_invalidate_token(self) -> None:
+        """An auth error (e.g. Unauthorized) must invalidate the cached token."""
+        self.client._auth.invalidate = MagicMock()  # type: ignore[method-assign]
+        self.client.http_client.post_json_get_json = AsyncMock(
+            side_effect=HttpResponseException(
+                HTTPStatus.UNAUTHORIZED,
+                "You are unauthorized to make this request",
+                b"",
+            )
+        )
+        self.get_failure(
+            self.client.get_group_members("test_group"), FamedlyControlError
+        )
+        self.client._auth.invalidate.assert_called()
 
     def test_request_fail_with_err_response_unknown_type(self) -> None:
         """Test that client returns 200 with Err message with unknown type raises FamedlyControlError with 500 code."""
