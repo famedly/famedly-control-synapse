@@ -183,12 +183,9 @@ class FamedlyControlClient:
                 err_response_model.raise_famedly_control_error()
 
         try:
-            if "Ok" not in response:
-                # XXX: Is this the correct Exception to raise here?
-                raise ValueError()
             return model.model_validate(response["Ok"])
-        except ValueError as e:
-            # ValueError is also a superclass of Pydantic's ValidationError, so both should be caught here
+        except (ValidationError, KeyError) as e:
+            # KeyError from "Ok" not being in the `response` dict
             msg = f"Famedly Control API: Unexpected response format: {response}"
             logger.error(msg + f"\n{e}")
             raise FamedlyControlError(HTTPStatus.BAD_GATEWAY, msg)
