@@ -1,4 +1,5 @@
 import logging
+from collections.abc import Callable
 from enum import Enum
 from http import HTTPStatus
 from typing import Final, Literal, NoReturn, TypeVar
@@ -109,6 +110,30 @@ class FamedlyControlGroupDiffErrorResponse(FamedlyControlErrorResponse):
         return super().get_error_message()
 
 
+_E = TypeVar("_E", bound=FamedlyControlErrorResponse)
+
+
+class CompleteFamedlyControlResponse(BaseModel):
+    # These are explicitly kept loose. The data can be varied, and it is the responsibility of the submodels to do the
+    # validation.
+    Ok: dict | None = None
+    Err: dict | None = None
+
+    def get_ok_response(self, success_model: type[_T]) -> _T:
+        return success_model.model_validate(self.Ok)
+
+    def raise_if_err(
+        self,
+        err_model: type[_E],
+        auth_invalidate_cb: Callable[[], None],
+    ) -> None:
+        if self.Err:
+            err_response = err_model.model_validate(self.Err)
+            if err_response.type == "Unauthorized":
+                auth_invalidate_cb()
+            err_response.raise_famedly_control_error()
+
+
 class FamedlyControlClient:
     def __init__(self, api: ModuleApi, config: FamedlyControlConfig):
         self._auth = JwtTokenProvider(api, config.famedly_control.jwt_auth)
@@ -162,33 +187,18 @@ class FamedlyControlClient:
             msg = f"Famedly Control API: Unexpected error: {e}"
             logger.error(msg)
             raise FamedlyControlError(msg=msg, errcode=errcode) from e
-
-        if "Err" in response:
+        else:
             try:
-                err_object = response["Err"]
-                err_response_model = error_response_model.model_validate(err_object)
+                response_model = CompleteFamedlyControlResponse.model_validate(response)
+                response_model.raise_if_err(error_response_model, self._auth.invalidate)
+                return response_model.get_ok_response(model)
             except ValidationError as e:
+                # Catch validation errors for all kinds of response categories.
                 logger.warning(f"Famedly Control API: Validation error: {e}")
                 raise FamedlyControlError(
-                    HTTPStatus.INTERNAL_SERVER_ERROR,
-                    "Famedly Control API: Unexpected error response format",
+                    HTTPStatus.BAD_GATEWAY,
+                    f"Famedly Control API: Unexpected response format: {response}",
                 )
-            else:
-                if err_response_model.type == "Unauthorized":
-                    # The token was rejected; drop it so the next request exchanges a fresh one instead of resending the
-                    # same rejected credential.
-                    # XXX: This is not tested for!! I had forgotten to include it and tests passed
-                    self._auth.invalidate()
-
-                err_response_model.raise_famedly_control_error()
-
-        try:
-            return model.model_validate(response["Ok"])
-        except (ValidationError, KeyError) as e:
-            # KeyError from "Ok" not being in the `response` dict
-            msg = f"Famedly Control API: Unexpected response format: {response}"
-            logger.error(msg + f"\n{e}")
-            raise FamedlyControlError(HTTPStatus.BAD_GATEWAY, msg)
 
     async def get_group_members(self, group_id: str) -> list[str]:
         """Get the current members of a group.
