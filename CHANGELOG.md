@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.0] - 2026-09-18
+
+- bump: Publish github workflow to more recent commit hash (Jason Little)
+- chore: add python version config for black (Soyoung Kim)
+- chore: remove pinned ruff and fix ruff errors (Soyoung Kim)
+- chore: remove redundant CI steps (Soyoung Kim)
+- feat: Process full diffs returned from Famedly Control when a unknown sync token error is encountered (Jason Little)
+
 ## [0.1.0] - 2026-07-28
 
 - bring in changes from upstream test suite (Jason Little)
